@@ -1,158 +1,110 @@
-import pandas as pd
+import os
+
 import torch
-from data_processing.load_ipa import IpaLoader
+from torch._C._profiler import ProfilerActivity
+from torch.profiler import profiler
+from torch.utils.data import DataLoader
 
-from data_processing.utils import string_to_class, pad_batch
-from ddg2pmodel import ddg2pModel
+#from src.config.config import data_config
+from experiments.experiment_1.config import data_config, model_config
 
-# Define the network
-d_in = 256  # Byte encoding
-d_out = 256  # Byte decoding
+from src.data.utils import pad_collate, BOS, SEP, EOS, calculate_per
+from src.tools.G2pTrainer import G2pTrainer
+from src.data.IpaDataset import IpaDataset
+from src.model.ddg2pmodel import ddg2pModel
 
-PAD = u'\x00'  # ASCII Null
-BOS = u'\x02'  # ASCII Start of Text
-EOS = u'\x03'  # ASCII End of Text
-FIN = u'\x04'  # ASCII End of Transmission
-SEP = u'\x1d'  # ASCII Group Seperator (Separates language code from phonemes)
+# torch.xpu is the API for Intel GPU support
+if torch.xpu.is_available():
+    # TODO Maybe this?
+    print(f'{torch.xpu.is_available()=}')
+    device = torch.device("xpu")
 
 if torch.cuda.is_available():
-    device = torch.device("cuda:0")
-    print('Using CUDA')
+    device = torch.device("cuda")
 else:
     device = torch.device("CPU")
-    print('Using CPU')
+print(f'{device=}')
 
 phase = 'all'
 
-if phase in ['load_data', 'all']:
-    # Load the data
-    ipa_data = IpaLoader('C:\\Users\\Richard\\Repository\\g2p_data\\ipa-dict\\data\\', 'all_data.csv').load_or_create()
-    # ['Language', 'Ortho', 'Pref', 'Phon']
-    # Ignore preference for now
-    ortho = list(ipa_data['Ortho'])
-    phono = list(ipa_data['Phon'])
-    lang = list(ipa_data['Language'])
-else:
-    ortho = ['she', 'had', 'your', 'dark', 'suit', 'in', 'greasy', 'wash', 'water', 'all', 'year',
-             'she had your', 'your dark suit', 'suit in greasy', 'greasy wash water', 'water all year']
-    phono = [u"ˈʃi", u"ˈhæd", u"ˈjɔɹ", u"ˈdɑɹk", u"ˈsut", u"ˈɪn", u"ˈɡɹisi", u"ˈwɑʃ", u"ˈwɔtɝ", u"ˈɔɫ", u"ˈjɪɹ",
-             u"ˈʃi ˈhæd ˈjɔɹ", u"ˈjɔɹ ˈdɑɹk ˈsut", u"ˈsut ˈɪn ˈɡɹisi", u"ˈɡɹisi ˈwɑʃ ˈwɔtɝ", u"ˈwɔtɝ ˈɔɫ ˈjɪɹ"]
-    lang = ['en_US'] * len(ortho)
+# You want slow code? Try this to make it worse, then fix it
+profile = False
 
-x_s = []
-y_s = []
+# Experiment: Architecture, languages, epochs etc
 
-for i, t, l in zip(ortho, phono, lang):
-    if l == 'en_US':
-        # TODO: 'nan' is coming in as literal nan, not string 'nan'
-        if pd.isnull(i):
-            continue
-        x_s.append(BOS + i + EOS + l + SEP + t)
-        y_s.append(PAD * (1 + len(i)) + l + SEP + t + EOS)
 
-x = [string_to_class(b) for b in x_s]
-y = [string_to_class(b) for b in y_s]
+# Load the data: ['Language', 'Ortho', 'Pref', 'Phon']
+# Use dummy data unless we are in load data or all phase
+ipa_data = IpaDataset(data_config['data_path'], data_config['csv_name'],
+                      languages=data_config['languages'], dummy_data=phase not in ['load_data', 'all'],
+                      max_length=124)
 
-x = pad_batch(x, 0)
-y = pad_batch(y, 0)
+# Split into train/test/valid
+train_subset, test_subset, valid_subset = torch.utils.data.random_split(ipa_data, [0.6, 0.2, 0.2],
+                                                                        generator=torch.Generator().manual_seed(1))
 
-batch_size = 128
+train_dataloader = DataLoader(train_subset, batch_size=data_config['batch_size'], shuffle=True, collate_fn=pad_collate)
 
-input_tensors = torch.tensor([list(b) for b in x], dtype=torch.long)
-output_tensors = torch.tensor([list(b) for b in y], dtype=torch.long)
-# Reshape to (batch_size, 256)
-input_tensors = input_tensors[:batch_size].to(device)
-output_tensors = output_tensors[:batch_size].to(device)
-
-# Print shapes to verify
-print(f"{input_tensors.shape=}")
-print(f"{output_tensors.shape=}")
-
-params = {'model': 'mamba', 'd_model': 256, 'n_layers': 2}
+params = {'model': model_config['model'], 'd_model': model_config['d_model'], 'n_layers': model_config['n_layers']}
 net = ddg2pModel(params).to(device)
 
-PATH = "C:\\Users\\Richard\\Repository\\ddg2p\\mamba_model.ckp"
+# If the network exists, load it
+if os.path.isfile(model_config['PATH']):
+    net.load_state_dict(torch.load(model_config['PATH'], weights_only=False))
 
 if phase in ['train', 'all']:
-    # Train it
-    loss_fn = torch.nn.CrossEntropyLoss()
-
-    # Optimizers specified in the torch.optim package
     optimizer = torch.optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-
-    net.train()
-
-    running_loss = 0.
-    last_loss = 0.
-
-    for epoch in range(1000):
-        # Make predictions for this batch
-        outputs = net(input_tensors)
-
-        # Compute the loss and its gradients
-        loss = loss_fn(outputs.permute(0, 2, 1), output_tensors)
-
-        # Zero your gradients for every batch!
-        optimizer.zero_grad()
-        loss.backward()
-        # Adjust learning weights
-        optimizer.step()
-
-        print(f'{epoch=}; {loss=}')
-
-    torch.save(net.state_dict(), PATH)
-else:
-    net.load_state_dict(torch.load(PATH, weights_only=False))
-
-
-# print(str(net))
+    # TODO: Is this a good use case for a decorator?
+    if profile:
+        activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
+        sort_by_keyword = "cuda_time_total"
+        with profiler.profile(activities=activities, with_stack=False, profile_memory=True) as prof:
+            trainer = G2pTrainer(net, train_dataloader, optimizer, device, 10, model_config['PATH'])
+            trainer.train(model_config['max_epochs'])
+        print(prof.key_averages(group_by_stack_n=5).table(sort_by=sort_by_keyword, row_limit=10))
+    else:
+        trainer = G2pTrainer(net, train_dataloader, optimizer, device, 10, model_config['PATH'])
+        trainer.train(model_config['max_epochs'])
 
 
 # Test it
-def generate(model,
-             prompt: str,
-             n_tokens_to_gen: int = 50,
-             ):
-    model.eval()
 
-    b_prompt = BOS + prompt + EOS
-    b_encoded = string_to_class(b_prompt)
-
-    # Convert byte data to a numpy array
-    input_ids = torch.unsqueeze(torch.tensor(b_encoded, dtype=torch.long), 0).to(device)
-
-    for token_n in range(n_tokens_to_gen):
-        with torch.no_grad():
-            indices_to_input = input_ids
-            next_token_logits = model(indices_to_input)[:, -1]
-
-        probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
-
-        next_indices = torch.argmax(probs, dim=-1)[:, None]
-        next_value = int(next_indices.squeeze())
-
-        input_ids = torch.cat([input_ids, next_indices], dim=1)
-        if next_value == ord(EOS) or next_value == ord(PAD):
-            break
-
-    # Step 1: Create a tensor and convert it to byte type
-    byte_tensor = input_ids[0].byte()
-    # Step 2: Convert the byte tensor to a NumPy array
-    byte_array = byte_tensor.cpu().numpy()
-    # Step 3: Convert the NumPy array to a byte string
-    byte_string = byte_array.tobytes()
-    # Step 4: Convert the byte string to a UTF-8 string
+def get_metrics(w):
+    out = net.generate(w, device)
     try:
-        output_completions = byte_string.decode('utf-8')
-    except UnicodeDecodeError:
-        print(f'invalid utf8: {byte_string=}')
-        output_completions = byte_string
+        EOS_pos = out.index(EOS)
+        SEP_pos = out.index(SEP)
+        # TODO: Splitting on bytes is a pain
+        ortho = out[1:EOS_pos]
+        lan = out[EOS_pos + 1:SEP_pos]
+        phon = out[SEP_pos + 1:-1]
 
-    return output_completions
+        # TODO: Was the language correct?
+        targ_lan = valid_subset.dataset.data.iloc[i]['Language']
+        correct_language = targ_lan == lan
+        # TODO: Was the phoneme sequence correct? WER
+        targ_phn = valid_subset.dataset.data.iloc[i]['Phon']
+        correct_phoneme = targ_phn == phon
+        # TODO: Were the phonemes correct? PER
+        PER = calculate_per(phon, targ_phn)
+        if i % 100 == 0:
+            print(f'{ortho=}\t{lan=}\t{phon=}\t{targ_lan=}\t{targ_phn=}\t{PER=}')
+        return correct_language, correct_phoneme, PER
+    except:
+        # Early networks fail this. One epoch seems enough to get vaild UTF-8
+        if i % 100 == 0:
+            print(f'PARSE FAILED: {out}')
+    return False, False, 0
 
 
-# Define the tokenizer with a byte-level model
+correct_language = 0
+correct_phoneme = 0
+total_PER = 0
 
-for w in ortho:
-    print(generate(model=net, prompt=w))
-print(generate(model=net, prompt="Barista"))
+for i in valid_subset.indices:
+    # TODO: I made this real ugly for some reason
+    correct_language_, correct_phoneme_, total_PER_ = get_metrics(valid_subset.dataset.data.iloc[i]['Ortho'])
+    correct_language += correct_language_
+    correct_phoneme += correct_phoneme_
+    total_PER += total_PER_
+print(f'{correct_language=}\t{correct_phoneme=}\t{total_PER=}')
