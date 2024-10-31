@@ -5,9 +5,11 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from src.data.utils import test_on_subset
+
 
 class G2pTrainer:
-    def __init__(self, model: nn.Module, dataloader: DataLoader, optimizer, device, save_cadence, out_path, use_rpc=False):
+    def __init__(self, model: nn.Module, dataloader: DataLoader, optimizer, device, save_cadence, out_path, use_rpc=False, test_subset=None):
         self.use_rpc = use_rpc
         self.model = model
         self.dataloader = dataloader
@@ -15,6 +17,7 @@ class G2pTrainer:
         self.device = device
         self.save_cadence = save_cadence
         self.out_path = out_path
+        self.test_subset = test_subset
 
     def _run_batch(self, x, t):
         # Zero your gradients for every batch!
@@ -50,13 +53,19 @@ class G2pTrainer:
                 start_time = time.perf_counter()
                 self._run_batch(source.to(self.device), targets.to(self.device))
                 elapsed_time = time.perf_counter() - start_time
-                print(f'{epoch=}\t{batch_num=}\t{(source.shape)=}\t{elapsed_time:.4f} seconds')
+                print(f'{epoch=}\t{batch_num=}\t{(source.shape)=}\t{elapsed_time:.4f}')
                 # NB: Saving after batches, not epochs!!!
                 if batch_num % self.save_cadence == 0:
                     torch.save(self.model.state_dict(), self.out_path)
                 if batch_num > 50000:
                     break
-
+        # After an Epoch, evaluate on the test set
+        start_time = time.perf_counter()
+        print('Testing...')
+        results = test_on_subset(self.test_subset, self.model, self.device)
+        elapsed_time = time.perf_counter() - start_time
+        print(f'{elapsed_time:.4f}')
+        return results
 
     def train(self, max_epochs):
         # If using RPC
@@ -72,5 +81,19 @@ class G2pTrainer:
 
             worker1.join()
         else:
+            best_test_WER = 1.0
+            no_improvement_count = 0
             for epoch in range(max_epochs):
-                self._run_epoch(epoch)
+                correct_language, correct_phoneme, total_PER = self._run_epoch(epoch)
+                WER = 1. - correct_phoneme
+                print(f'Tested {epoch=}\t{correct_language=}\t{WER=}\t{total_PER=}')
+                if WER < best_test_WER:
+                    print(f'New best test {WER=}')
+                    no_improvement_count = 0
+                else:
+                    no_improvement_count +=1
+                    print(f'{WER=} is not better than {best_test_WER} - {no_improvement_count=}')
+                if no_improvement_count > 2:
+                    print(f'OVERLEARNING??? after {epoch=}')
+                    break
+
