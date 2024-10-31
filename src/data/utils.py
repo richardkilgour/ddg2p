@@ -1,3 +1,5 @@
+import random
+
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
@@ -92,3 +94,57 @@ BOS = u'\x02'  # ASCII Start of Text
 EOS = u'\x03'  # ASCII End of Text
 FIN = u'\x04'  # ASCII End of Transmission
 SEP = u'\x1d'  # ASCII Group Seperator (Separates language code from phonemes)
+
+
+def get_metrics(word, model, device):
+    """
+    For a given word, see if the:
+    Language is 100% correct -> Bool
+    Phonemes are 100% correct -> Bool
+    Phoneme Error Rate -> float
+    """
+    out = model.generate(word['Ortho'], device)
+    try:
+        EOS_pos = out.index(EOS)
+        SEP_pos = out.index(SEP)
+        # TODO: Splitting on bytes is a pain
+        ortho = out[1:EOS_pos]
+        lan = out[EOS_pos + 1:SEP_pos]
+        phon = out[SEP_pos + 1:-1]
+
+        # TODO: Was the language correct?
+        targ_lan = word['Language']
+        correct_language = targ_lan == lan
+        # TODO: Was the phoneme sequence correct? WER
+        targ_phn = word['Phon']
+        correct_phoneme = targ_phn == phon
+        # TODO: Were the phonemes correct? PER - this value is so wrong. Do not trust it.
+        PER = calculate_per(phon, targ_phn)
+        if random.randint(1, 100) == 60:
+            print(f'{ortho=}\t{lan=}\t{phon=}\t{targ_lan=}\t{targ_phn=}\t{PER=}')
+        return correct_language, correct_phoneme, PER
+    except:
+        # Early networks fail this. One epoch seems enough to get valid UTF-8
+        if random.randint(1, 100) == 60:
+            print(f'PARSE FAILED: {out}')
+    return False, False, 0.
+
+
+def test_on_subset(subset, model, device):
+    correct_language = 0
+    correct_phoneme = 0
+    total_PER = 0
+    counter = 0
+    subset_len = len(subset)
+    for i in subset.indices:
+        counter += 1
+        # TODO: I made this real ugly for some reason
+        correct_language_, correct_phoneme_, total_PER_ = get_metrics(subset.dataset.data.iloc[i], model, device)
+        correct_language += correct_language_
+        correct_phoneme += correct_phoneme_
+        total_PER += total_PER_
+        if i % 17 == 0:
+            print('finished testing early')
+            subset_len = counter
+            break
+    return correct_language/subset_len, correct_phoneme/subset_len, total_PER/subset_len
