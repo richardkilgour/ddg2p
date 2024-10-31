@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 #from src.config.config import data_config
 from experiments.experiment_1.config import data_config, model_config
 
-from src.data.utils import pad_collate, BOS, SEP, EOS, calculate_per
+from src.data.utils import pad_collate, test_on_subset
 from src.tools.G2pTrainer import G2pTrainer
 from src.data.IpaDataset import IpaDataset
 from src.model.ddg2pmodel import ddg2pModel
@@ -63,48 +63,9 @@ if phase in ['train', 'all']:
             trainer.train(model_config['max_epochs'])
         print(prof.key_averages(group_by_stack_n=5).table(sort_by=sort_by_keyword, row_limit=10))
     else:
-        trainer = G2pTrainer(net, train_dataloader, optimizer, device, 10, model_config['PATH'])
+        trainer = G2pTrainer(net, train_dataloader, optimizer, device, 10, model_config['PATH'], test_subset=test_subset)
         trainer.train(model_config['max_epochs'])
 
-
-# Test it
-
-def get_metrics(w):
-    out = net.generate(w, device)
-    try:
-        EOS_pos = out.index(EOS)
-        SEP_pos = out.index(SEP)
-        # TODO: Splitting on bytes is a pain
-        ortho = out[1:EOS_pos]
-        lan = out[EOS_pos + 1:SEP_pos]
-        phon = out[SEP_pos + 1:-1]
-
-        # TODO: Was the language correct?
-        targ_lan = valid_subset.dataset.data.iloc[i]['Language']
-        correct_language = targ_lan == lan
-        # TODO: Was the phoneme sequence correct? WER
-        targ_phn = valid_subset.dataset.data.iloc[i]['Phon']
-        correct_phoneme = targ_phn == phon
-        # TODO: Were the phonemes correct? PER
-        PER = calculate_per(phon, targ_phn)
-        if i % 100 == 0:
-            print(f'{ortho=}\t{lan=}\t{phon=}\t{targ_lan=}\t{targ_phn=}\t{PER=}')
-        return correct_language, correct_phoneme, PER
-    except:
-        # Early networks fail this. One epoch seems enough to get vaild UTF-8
-        if i % 100 == 0:
-            print(f'PARSE FAILED: {out}')
-    return False, False, 0
-
-
-correct_language = 0
-correct_phoneme = 0
-total_PER = 0
-
-for i in valid_subset.indices:
-    # TODO: I made this real ugly for some reason
-    correct_language_, correct_phoneme_, total_PER_ = get_metrics(valid_subset.dataset.data.iloc[i]['Ortho'])
-    correct_language += correct_language_
-    correct_phoneme += correct_phoneme_
-    total_PER += total_PER_
+print(f'testng on validation set...')
+correct_language, correct_phoneme, total_PER = test_on_subset(valid_subset, net, device)
 print(f'{correct_language=}\t{correct_phoneme=}\t{total_PER=}')
