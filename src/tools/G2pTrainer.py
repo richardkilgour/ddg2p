@@ -35,6 +35,7 @@ class G2pTrainer:
             pass
 
     def _run_epoch(self, epoch):
+        epoch_total_time = 0
         if self.use_rpc:
             from torch.distributed.rpc import init_rpc, remote, rpc_async
             init_rpc("zeta_0", rank=0, world_size=2)
@@ -52,15 +53,18 @@ class G2pTrainer:
                 start_time = time.perf_counter()
                 self._run_batch(source.to(self.device), targets.to(self.device))
                 elapsed_time = time.perf_counter() - start_time
-                print(f'{epoch=}\t{batch_num=}\t{(source.shape)=}\t{elapsed_time:.4f}')
+                epoch_total_time += elapsed_time
+                if batch_num % 20 == 0:
+                    print(f'{epoch=}\t{batch_num=}\t{(source.shape)=}\t{elapsed_time:.4f}')
                 if batch_num > 50000:
                     break
+        print(f'{epoch_total_time=:.4f}')
         # After an Epoch, evaluate on the test set
         start_time = time.perf_counter()
         print('Testing...')
         results = test_on_subset(self.test_subset, self.model, self.device)
-        elapsed_time = time.perf_counter() - start_time
-        print(f'{elapsed_time:.4f}')
+        testing_elapsed_time = time.perf_counter() - start_time
+        print(f'{testing_elapsed_time=:.4f}')
         return results
 
     def train(self, max_epochs):
@@ -77,13 +81,14 @@ class G2pTrainer:
 
             worker1.join()
         else:
-            best_test_WER = 1.0
+            best_test_WER = 1.1 # 110% ensures the first epoch will improve and net will be saved
+            best_test_PER = 1.1
             no_improvement_count = 0
             for epoch in range(max_epochs):
                 correct_language, correct_phoneme, total_PER = self._run_epoch(epoch)
                 WER = 1. - correct_phoneme
                 print(f'Tested {epoch=}\t{correct_language=}\t{WER=}\t{total_PER=}')
-                if WER < best_test_WER:
+                if WER < best_test_WER or (WER == best_test_WER and total_PER < best_test_PER):
                     print(f'New best test {WER=}')
                     no_improvement_count = 0
                     torch.save(self.model.state_dict(), self.out_path)
