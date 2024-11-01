@@ -9,13 +9,12 @@ from src.data.utils import test_on_subset
 
 
 class G2pTrainer:
-    def __init__(self, model: nn.Module, dataloader: DataLoader, optimizer, device, save_cadence, out_path, use_rpc=False, test_subset=None):
+    def __init__(self, model: nn.Module, dataloader: DataLoader, optimizer, device, out_path, use_rpc=False, test_subset=None):
         self.use_rpc = use_rpc
         self.model = model
         self.dataloader = dataloader
         self.optimizer = optimizer
         self.device = device
-        self.save_cadence = save_cadence
         self.out_path = out_path
         self.test_subset = test_subset
 
@@ -54,9 +53,6 @@ class G2pTrainer:
                 self._run_batch(source.to(self.device), targets.to(self.device))
                 elapsed_time = time.perf_counter() - start_time
                 print(f'{epoch=}\t{batch_num=}\t{(source.shape)=}\t{elapsed_time:.4f}')
-                # NB: Saving after batches, not epochs!!!
-                if batch_num % self.save_cadence == 0:
-                    torch.save(self.model.state_dict(), self.out_path)
                 if batch_num > 50000:
                     break
         # After an Epoch, evaluate on the test set
@@ -90,6 +86,7 @@ class G2pTrainer:
                 if WER < best_test_WER:
                     print(f'New best test {WER=}')
                     no_improvement_count = 0
+                    torch.save(self.model.state_dict(), self.out_path)
                 else:
                     no_improvement_count +=1
                     print(f'{WER=} is not better than {best_test_WER} - {no_improvement_count=}')

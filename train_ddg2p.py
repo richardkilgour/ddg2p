@@ -59,11 +59,11 @@ if phase in ['train', 'all']:
         activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
         sort_by_keyword = "cuda_time_total"
         with profiler.profile(activities=activities, with_stack=False, profile_memory=True) as prof:
-            trainer = G2pTrainer(net, train_dataloader, optimizer, device, 10, model_config['PATH'])
+            trainer = G2pTrainer(net, train_dataloader, optimizer, device, model_config['PATH'], test_subset=test_subset)
             trainer.train(model_config['max_epochs'])
         print(prof.key_averages(group_by_stack_n=5).table(sort_by=sort_by_keyword, row_limit=10))
     else:
-        trainer = G2pTrainer(net, train_dataloader, optimizer, device, 10, model_config['PATH'], test_subset=test_subset)
+        trainer = G2pTrainer(net, train_dataloader, optimizer, device, model_config['PATH'], test_subset=test_subset)
         trainer.train(model_config['max_epochs'])
 
 print(f'testng on validation set...')
