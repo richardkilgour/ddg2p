@@ -133,18 +133,14 @@ def get_metrics(word, model, device):
 def test_on_subset(subset, model, device):
     correct_language = 0
     correct_phoneme = 0
-    total_PER = 0
+    total_per = 0
     counter = 0
     subset_len = len(subset)
     for i in subset.indices:
         counter += 1
         # TODO: I made this real ugly for some reason
-        correct_language_, correct_phoneme_, total_PER_ = get_metrics(subset.dataset.data.iloc[i], model, device)
+        correct_language_, correct_phoneme_, total_per_ = get_metrics(subset.dataset.data.iloc[i], model, device)
         correct_language += correct_language_
         correct_phoneme += correct_phoneme_
-        total_PER += total_PER_
-        if i % 17 == 0:
-            print('finished testing early')
-            subset_len = counter
-            break
-    return correct_language/subset_len, correct_phoneme/subset_len, total_PER/subset_len
+        total_per += total_per_
+    return correct_language/subset_len, correct_phoneme/subset_len, total_per/subset_len
