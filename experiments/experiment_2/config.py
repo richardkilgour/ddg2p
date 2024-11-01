@@ -1,4 +1,4 @@
-# 2 layer Mamba with UK English only
+# # layer Mamba with UK English only
 
 # Define the data config
 data_config = {
@@ -14,7 +14,7 @@ data_config = {
 model_config = {
     'model': 'mamba',
     'd_model': 256,
-    'n_layers': 2,
-    'PATH': "C:\\Users\\Richard\\Repository\\ddg2p\\experiments\\experiment_1\\mamba_model_en.ckp",
-    'max_epochs': 8,
+    'n_layers': 3,
+    'PATH': "C:\\Users\\Richard\\Repository\\ddg2p\\experiments\\experiment_2\\mamba_model_en.ckp",
+    'max_epochs': 40,
 }
