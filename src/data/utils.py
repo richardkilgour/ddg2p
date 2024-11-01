@@ -2,7 +2,7 @@ import random
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
-
+from torchmetrics.text import WordErrorRate
 
 def pad_collate(batch):
     (xx, yy) = zip(*batch)
@@ -79,14 +79,7 @@ def encode_and_pad(x_raw, y_raw, pad=0):
 def calculate_per(reference, hypothesis):
     ref_words = list(reference)
     hyp_words = list(hypothesis)
-
-    substitutions = sum(1 for ref, hyp in zip(ref_words, hyp_words) if ref != hyp)
-    deletions = len(ref_words) - len(hyp_words)
-    insertions = len(hyp_words) - len(ref_words)
-
-    total_phoneme = len(ref_words)
-    per = (substitutions + deletions + insertions) / total_phoneme
-    return per
+    return WordErrorRate()(ref_words, hyp_words).item()
 
 
 PAD = u'\x00'  # ASCII Null
