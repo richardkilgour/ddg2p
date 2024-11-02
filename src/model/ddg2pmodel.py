@@ -18,9 +18,10 @@ class ddg2pModel(nn.Module):
 
         d_model = params['d_model']
         n_layers = params['n_layers']
+        expand_factor = params['expand_factor']
         self.model = params['model']
         if self.model == 'mamba':
-            config = MambaConfig(d_model=d_model, n_layers=n_layers, expand_factor=4)
+            config = MambaConfig(d_model=d_model, n_layers=n_layers, expand_factor=expand_factor)
             self.recurrence = Mamba(config)
         elif self.model == 'gru':
             self.recurrence = nn.GRU(256, 1024, n_layers)

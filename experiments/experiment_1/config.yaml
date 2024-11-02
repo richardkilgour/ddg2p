@@ -1,0 +1,22 @@
+# 2 layer Mamba with UK English only
+data:
+    d_in': 256  # Byte encoding
+    d_out': 256  # Byte decoding
+    data_path: "C:\\Users\\Richard\\Repository\\g2p_data\\ipa-dict\\data\\"
+    csv_name: 'en_data.csv'
+    batch_size: 64
+    languages: ['en_UK']
+
+model:
+    model: 'mamba'
+    d_model: 256
+    n_layers: 2
+    expand_factor: 4
+    PATH: "C:\\Users\\Richard\\Repository\\ddg2p\\experiments\\experiment_1\\mamba_model_en.ckp"
+
+training:
+    max_epochs: 40
+    learning_rate: 0.001
+    optimizer: "sgd"
+
+
