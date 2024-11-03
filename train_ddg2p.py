@@ -1,6 +1,5 @@
 import argparse
 import os
-import sys
 
 import torch
 import yaml
@@ -47,7 +46,7 @@ def main():
 
     # Define your model based on config
     params = {'model': config['model']['model'], 'd_model': config['model']['d_model'],
-              'n_layers': config['model']['n_layers']}
+              'n_layers': config['model']['n_layers'], 'expand_factor': config['model']['expand_factor']}
     model = ddg2pModel(params).to(device)
 
     # Define optimizer
