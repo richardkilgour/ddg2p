@@ -81,20 +81,21 @@ class G2pTrainer:
 
             worker1.join()
         else:
-            best_test_WER = 1.1 # 110% ensures the first epoch will improve and net will be saved
+            best_test_wer = 1.1 # 110% ensures the first epoch will improve and net will be saved
             best_test_PER = 1.1
             no_improvement_count = 0
             for epoch in range(max_epochs):
                 correct_language, correct_phoneme, total_PER = self._run_epoch(epoch)
-                WER = 1. - correct_phoneme
-                print(f'Tested {epoch=}\t{correct_language=}\t{WER=}\t{total_PER=}')
-                if WER < best_test_WER or (WER == best_test_WER and total_PER < best_test_PER):
-                    print(f'New best test {WER=}')
+                wer = 1. - correct_phoneme
+                print(f'Tested {epoch=}\t{correct_language=}\t{wer=}\t{total_PER=}')
+                if wer < best_test_wer or (wer == best_test_wer and total_PER < best_test_PER):
+                    print(f'New best test {wer=}')
                     no_improvement_count = 0
+                    best_test_wer = wer
                     torch.save(self.model.state_dict(), self.out_path)
                 else:
                     no_improvement_count +=1
-                    print(f'{WER=} is not better than {best_test_WER} - {no_improvement_count=}')
+                    print(f'{wer=} is not better than {best_test_wer} - {no_improvement_count=}')
                 if no_improvement_count > 2:
                     print(f'OVERLEARNING??? after {epoch=}')
                     break
