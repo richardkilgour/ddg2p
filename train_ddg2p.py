@@ -51,7 +51,7 @@ def main():
 
     # Define optimizer
     if config['training']['optimizer'] == 'adam':
-        optimizer = torch.optim.Adam(model.parameters())  # Otherwise defualts
+        optimizer = torch.optim.Adam(model.parameters())  # Otherwise defaults
     elif config['training']['optimizer'] == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
@@ -89,8 +89,8 @@ def main():
         trainer.train(config['training']['max_epochs'])
 
     print(f'testng on validation set...')
-    correct_language, correct_phoneme, total_PER = test_on_subset(valid_subset, model, device)
-    print(f'{correct_language=}\t{correct_phoneme=}\t{total_PER=}')
+    correct_language, correct_phoneme, total_per = test_on_subset(valid_subset, model, device)
+    print(f'{correct_language=}\t{correct_phoneme=}\t{total_per=}')
 
 
 if __name__ == "__main__":
