@@ -29,7 +29,8 @@ def load_file_into_dataframe(data_path: str):
                 'Language': file_name,
                 'Ortho': index,
                 'Pref': enum,
-                'Phon': entry
+                # Remove the phoneme markers
+                'Phon': entry.strip('/')
             })
 
     print(f'Read {i} rows from {file_name}')
