@@ -89,8 +89,8 @@ def main():
         trainer.train(config['training']['max_epochs'])
 
     print(f'testng on validation set...')
-    correct_language, correct_phoneme, total_per = test_on_subset(valid_subset, model, device)
-    print(f'{correct_language=}\t{correct_phoneme=}\t{total_per=}')
+    correct_language, total_wer, total_per = test_on_subset(valid_subset, model, device)
+    print(f'{correct_language=}\t{total_wer=}\t{total_per=}')
 
 
 if __name__ == "__main__":
