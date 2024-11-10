@@ -54,15 +54,13 @@ class G2pTrainer:
                 self._run_batch(source.to(self.device), targets.to(self.device))
                 elapsed_time = time.perf_counter() - start_time
                 epoch_total_time += elapsed_time
-                if batch_num % 20 == 0:
+                if batch_num % 100 == 0:
                     print(f'{epoch=}\t{batch_num=}\t{(source.shape)=}\t{elapsed_time:.4f}')
-                if batch_num > 50000:
-                    break
         print(f'{epoch_total_time=:.4f}')
         # After an Epoch, evaluate on the test set
         start_time = time.perf_counter()
         print('Testing...')
-        results = test_on_subset(self.test_subset, self.model, self.device)
+        results = test_on_subset(self.test_subset, self.model, self.device, beam_width=1)
         testing_elapsed_time = time.perf_counter() - start_time
         print(f'{testing_elapsed_time=:.4f}')
         return results
@@ -82,21 +80,20 @@ class G2pTrainer:
             worker1.join()
         else:
             best_test_wer = 1.1 # 110% ensures the first epoch will improve and net will be saved
-            best_test_PER = 1.1
+            best_test_per = 1.1
             no_improvement_count = 0
             for epoch in range(max_epochs):
-                correct_language, correct_phoneme, total_PER = self._run_epoch(epoch)
-                wer = 1. - correct_phoneme
-                print(f'Tested {epoch=}\t{correct_language=}\t{wer=}\t{total_PER=}')
-                if wer < best_test_wer or (wer == best_test_wer and total_PER < best_test_PER):
-                    print(f'New best test {wer=}')
+                test_ler, test_wer, test_per = self._run_epoch(epoch)
+                print(f'Tested {epoch=}\t{test_ler=}\t{test_wer=}\t{test_per=}')
+                if test_wer < best_test_wer or (test_wer == best_test_wer and test_per < best_test_per):
+                    print(f'New best {test_wer=}')
                     no_improvement_count = 0
-                    best_test_wer = wer
+                    best_test_wer = test_wer
                     torch.save(self.model.state_dict(), self.out_path)
                 else:
                     no_improvement_count +=1
-                    print(f'{wer=} is not better than {best_test_wer} - {no_improvement_count=}')
+                    print(f'{test_wer=} is not better than {best_test_wer} - {no_improvement_count=}')
                 if no_improvement_count > 2:
-                    print(f'OVERLEARNING??? after {epoch=}')
+                    print(f'OVERLEARNING??? after {epoch=}. ABORT training')
                     break
 
