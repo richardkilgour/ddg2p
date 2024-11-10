@@ -50,51 +50,70 @@ def calculate_per(reference, hypothesis):
     return WordErrorRate()(ref_words, hyp_words).item()
 
 
-def get_metrics(word, model, device):
+
+
+def get_metrics(word, model, device, beam_width=1):
     """
-    For a given word, see if the:
+    For a given word, return the:
     Language is 100% correct -> Bool
-    Phonemes are 100% correct -> Bool
     Phoneme Error Rate -> float
     """
-    out = model.generate(word['Ortho'], device)
-    try:
-        EOS_pos = out.index(EOS)
-        SEP_pos = out.index(SEP)
-        # TODO: Splitting on bytes is a pain
-        ortho = out[1:EOS_pos]
-        lan = out[EOS_pos + 1:SEP_pos]
-        phon = out[SEP_pos + 1:-1]
+    greedy = model.generate(word['Ortho'], device)
+    if beam_width == 1:
+        out = greedy
+    else:
+        out = model.generate_beam(word['Ortho'], device, beam_width)
 
-        # TODO: Was the language correct?
-        targ_lan = word['Language']
+
+    correct_language = False
+    per = 1.
+    targ_lan = word['Language']
+    targ_phn = word['Phon']
+
+    try:
+        lan, ortho, phon = parse_output(out)
+
         correct_language = targ_lan == lan
-        # TODO: Was the phoneme sequence correct? WER
-        targ_phn = word['Phon']
-        correct_phoneme = targ_phn == phon
-        # TODO: Were the phonemes correct? PER - this value is so wrong. Do not trust it.
-        PER = calculate_per(phon, targ_phn)
+
+        # Phoneme Error rate (as a proportion of the word length)
+        per = calculate_per(phon, targ_phn)
+
+        # Let's compare them!!!
+        if greedy != out:
+            g_lan, g_ortho, g_phon = parse_output(greedy)
+            g_per = calculate_per(phon, g_phon)
+            print(f'For {word["Ortho"]}, BEAM got {"BETTER" if per<g_per else "WORSE" if per>g_per else "DIFFERENT"} '
+                  f'result\t{phon=}\t{g_phon=}\t{targ_phn}')
+
+
+        # Print every 100 words randomly
         if random.randint(1, 100) == 60:
-            print(f'{ortho=}\t{lan=}\t{phon=}\t{targ_lan=}\t{targ_phn=}\t{PER=}')
-        return correct_language, correct_phoneme, PER
+            print(f'{ortho=}\t{lan=}\t{phon=}\t{targ_lan=}\t{targ_phn=}\t{per=}')
     except:
         # Early networks fail this. One epoch seems enough to get valid UTF-8
-        if random.randint(1, 100) == 60:
-            print(f'PARSE FAILED: {out}')
-    return False, False, 0.
+        print(f'PARSE FAILED: {out}')
+    return correct_language, per
 
 
-def test_on_subset(subset, model, device):
-    correct_language = 0
-    correct_phoneme = 0
+def parse_output(out):
+    eos_pos = out.index(EOS)
+    sep_pos = out.index(SEP)
+    # TODO: Splitting on bytes is a pain
+    ortho = out[1:eos_pos]
+    lan = out[eos_pos + 1:sep_pos]
+    phon = out[sep_pos + 1:-1]
+    return lan, ortho, phon
+
+
+def test_on_subset(subset, model, device, beam_width=3):
+    """For a given subset, return average language, word and phoneme error rates. Lower is better."""
+    total_ler = 0
+    total_wer = 0
     total_per = 0
-    counter = 0
     subset_len = len(subset)
     for i in subset.indices:
-        counter += 1
-        # TODO: I made this real ugly for some reason
-        correct_language_, correct_phoneme_, total_per_ = get_metrics(subset.dataset.data.iloc[i], model, device)
-        correct_language += correct_language_
-        correct_phoneme += correct_phoneme_
-        total_per += total_per_
-    return correct_language / subset_len, correct_phoneme / subset_len, total_per / subset_len
+        correct_language, per = get_metrics(subset.dataset.data.iloc[i], model, device, beam_width)
+        total_ler += 0 if correct_language else 1
+        total_wer += 0 if per == 0. else 1
+        total_per += per
+    return total_ler / subset_len, total_wer / subset_len, total_per / subset_len
