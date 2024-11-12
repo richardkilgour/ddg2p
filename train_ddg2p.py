@@ -6,10 +6,10 @@ import yaml
 from torch.profiler import profiler
 from torch.utils.data import DataLoader
 
-from src.data.utils import pad_collate, test_on_subset
+from src.data.utils import pad_collate, test_on_subset, bucket_and_batch
 from src.tools.G2pTrainer import G2pTrainer
 from src.data.IpaDataset import IpaDataset
-from src.model.ddg2pmodel import ddg2pModel
+from src.model.G2pModel import G2pModel
 
 # torch.xpu is the API for Intel GPU support
 if torch.xpu.is_available():
@@ -23,18 +23,31 @@ else:
     device = torch.device("CPU")
 print(f'{device=}')
 
-phase = 'all'
-
 # You want slow code? Try this to make it worse, then fix it
 profile = False
 
-
-# Experiment: Architecture, languages, epochs etc
 
 def load_config(config_file):
     with open(config_file, 'r') as file:
         config = yaml.safe_load(file)
     return config
+
+
+def profile_func(func):
+    def wrapper(*args):
+        from torch._C._profiler import ProfilerActivity
+        activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
+        sort_by_keyword = "cuda_time_total"
+
+        with profiler.profile(activities=activities, with_stack=False, profile_memory=True) as prof:
+            retval = func(args)
+            print(prof.key_averages(group_by_stack_n=5).table(sort_by=sort_by_keyword, row_limit=10))
+        return retval
+
+    if profile:
+        return wrapper
+    else:
+        return func
 
 
 def main():
@@ -44,49 +57,48 @@ def main():
 
     config = load_config(args.config)
 
-    # Define your model based on config
-    params = {'model': config['model']['model'], 'd_model': config['model']['d_model'],
+    model_params = {'model': config['model']['model'], 'd_model': config['model']['d_model'],
               'n_layers': config['model']['n_layers'], 'expand_factor': config['model']['expand_factor']}
-    model = ddg2pModel(params).to(device)
+    model = G2pModel(model_params).to(device)
 
     # Define optimizer
+    # TODO: Get params from config
     if config['training']['optimizer'] == 'adam':
         optimizer = torch.optim.Adam(model.parameters())  # Otherwise defaults
-    elif config['training']['optimizer'] == 'sgd':
+    else: # config['training']['optimizer'] == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
     # Add training loop, etc.
     # Load the data: ['Language', 'Ortho', 'Pref', 'Phon']
-    # Use dummy data unless we are in load data or all phase
+    remove_spaces = False
+    if 'remove_spaces' in config['data']:
+        remove_spaces = config['data']['remove_spaces']
+
     ipa_data = IpaDataset(config['data']['data_path'], config['data']['csv_name'],
-                          languages=config['data']['languages'], dummy_data=phase not in ['load_data', 'all'],
-                          max_length=124)
+                          languages=config['data']['languages'], max_length=124, remove_spaces=remove_spaces)
 
     # Split into train/test/valid
-    train_subset, test_subset, valid_subset = torch.utils.data.random_split(ipa_data, [0.6, 0.2, 0.2],
+    # TODO: Define data split in params
+    train_subset, test_subset, valid_subset = torch.utils.data.random_split(ipa_data, [0.8, 0.1, 0.1],
                                                                             generator=torch.Generator().manual_seed(1))
 
-    train_dataloader = DataLoader(train_subset, batch_size=config['data']['batch_size'], shuffle=True,
-                                  collate_fn=pad_collate)
+    bucketed_batches = bucket_and_batch(train_subset, batch_size=64)
+
+    train_dataloader = DataLoader(train_subset, batch_size=config['training']['batch_size'], shuffle=True,
+                                  collate_fn=lambda x: pad_collate(bucketed_batches.pop(0)), pin_memory=True)
 
     # If the network exists, load it
     if os.path.isfile(config['model']['PATH']):
         model.load_state_dict(torch.load(config['model']['PATH'], weights_only=False))
 
-    # TODO: Is this a good use case for a decorator?
-    if profile:
-        from torch._C._profiler import ProfilerActivity
-        activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
-        sort_by_keyword = "cuda_time_total"
-        with profiler.profile(activities=activities, with_stack=False, profile_memory=True) as prof:
-            trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],
-                                 test_subset=test_subset)
-            trainer.train(config['model']['max_epochs'])
-        print(prof.key_averages(group_by_stack_n=5).table(sort_by=sort_by_keyword, row_limit=10))
-    else:
-        trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],
-                             test_subset=test_subset)
+    trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],
+                         test_subset=test_subset)
+
+    @profile_func
+    def train_it():
         trainer.train(config['training']['max_epochs'])
+
+    train_it()
 
     print(f'testng on validation set...')
     correct_language, total_wer, total_per = test_on_subset(valid_subset, model, device)
