@@ -1,6 +1,7 @@
 import random
 import pycountry
 from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Sampler
 from torchmetrics.text import WordErrorRate
 
 PAD = u'\x00'  # ASCII Null
@@ -20,30 +21,44 @@ def pad_collate(batch):
     return xx_pad, yy_pad
 
 
-def bucket_and_batch(data, batch_size=64):
-    # Create buckets based on length
-    length_buckets = {}
-    for item in data:
-        length = len(item[0])
-        if length not in length_buckets:
-            length_buckets[length] = []
-        length_buckets[length].append(item)
+class BucketBatchSampler(Sampler):
+    def __init__(self, data, batch_size):
+        super().__init__()
+        self.data = data
+        self.batch_size = batch_size
+        self.buckets = self.create_buckets()
 
-    # Sort buckets based on size from smallest to largest
-    sorted_buckets = dict(sorted(length_buckets.items()))
+    def create_buckets(self):
+        # Create buckets based on length
+        length_buckets = {}
+        for i, item in enumerate(self.data):
+            length = len(item[0])
+            if length not in length_buckets:
+                length_buckets[length] = []
+            length_buckets[length].append(i)
 
-    # Create batches
-    sorted_items = []
-    for v in sorted_buckets.values():
-        sorted_items.extend(v)
+        # Sort buckets based on size from smallest to largest
+        sorted_buckets = dict(sorted(length_buckets.items()))
 
-    batches = []
-    for i in range(0, len(sorted_items), batch_size):
-        batches.append(sorted_items[i:i + batch_size])
+        # Create batches
+        sorted_items = []
+        for v in sorted_buckets.values():
+            sorted_items.extend(v)
 
-    # Shuffle all batches
-    random.shuffle(batches)
-    return batches
+        batches = []
+        for i in range(0, len(sorted_items), self.batch_size):
+            batches.append(sorted_items[i:i + self.batch_size])
+
+        # Shuffle all batches
+        random.shuffle(batches)
+        return batches
+
+    def __iter__(self):
+        for batch in self.buckets:
+            yield batch
+
+    def __len__(self):
+        return len(self.buckets)
 
 
 def iso3_to_iso2(iso3_code: str) -> str:

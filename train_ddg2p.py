@@ -6,7 +6,7 @@ import yaml
 from torch.profiler import profiler
 from torch.utils.data import DataLoader
 
-from src.data.utils import pad_collate, test_on_subset, bucket_and_batch
+from src.data.utils import test_on_subset, BucketBatchSampler, pad_collate
 from src.tools.G2pTrainer import G2pTrainer
 from src.data.IpaDataset import IpaDataset
 from src.model.G2pModel import G2pModel
@@ -82,20 +82,18 @@ def main():
     train_subset, test_subset, valid_subset = torch.utils.data.random_split(ipa_data, [0.8, 0.1, 0.1],
                                                                             generator=torch.Generator().manual_seed(1))
 
-    bucketed_batches = bucket_and_batch(train_subset, batch_size=64)
-
-    train_dataloader = DataLoader(train_subset, batch_size=config['training']['batch_size'], shuffle=True,
-                                  collate_fn=lambda x: pad_collate(bucketed_batches.pop(0)), pin_memory=True)
+    bucket_sampler = BucketBatchSampler(train_subset, batch_size=config['training']['batch_size'])
 
     # If the network exists, load it
     if os.path.isfile(config['model']['PATH']):
         model.load_state_dict(torch.load(config['model']['PATH'], weights_only=False))
 
-    trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],
-                         test_subset=test_subset)
-
     @profile_func
     def train_it():
+        train_dataloader = DataLoader(train_subset, batch_sampler=bucket_sampler, collate_fn=pad_collate,
+                                      pin_memory=True)
+        trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],
+                             test_subset=test_subset)
         trainer.train(config['training']['max_epochs'])
 
     train_it()
