@@ -4,14 +4,24 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from src.data.utils import BOS, EOS, PAD, SEP, string_to_class
+from src.data.utils import BOS, EOS, PAD, SEP, string_to_class, iso3_to_iso2
 
 
-def load_file_into_dataframe(data_path: str):
+def wikidata_to_ISO2(name):
+    """Wikidata style file name is language_script[_country]_transcription_filtered"""
+    components = name.split('_')
+    language = iso3_to_iso2(components[0])
+    if components[2] in ['broad', 'narrow']:
+        return language
+    region = components[2].upper()
+    return language + '_' + region
+
+
+def load_file_into_dataframe(data_path: str, remove_spaces=False):
     data = []
 
     # Extract the file name (without the extension) == language code
-    file_name = os.path.basename(data_path).split('.')[0]
+    file_name, ext = os.path.basename(data_path).split('.')
 
     print(f'Processing {file_name}')
 
@@ -20,17 +30,23 @@ def load_file_into_dataframe(data_path: str):
 
     print(f'{df.size=}')
 
+    if ext == 'tsv':
+        # TODO: Identify wikidata formated names better. Maybe a parameter?
+        language_code = wikidata_to_ISO2(file_name)
+    else:
+        language_code = file_name
+
     # Iterate through each row in the DataFrame
     for i, row in df.iterrows():
         index = row[0]
         entries = row[1].split(', ')
         for enum, entry in enumerate(entries):
             data.append({
-                'Language': file_name,
+                'Language': language_code,
                 'Ortho': index,
                 'Pref': enum,
                 # Remove the phoneme markers
-                'Phon': entry.strip('/')
+                'Phon': entry.replace(" ", "").strip('/') if remove_spaces else entry.strip('/')
             })
 
     print(f'Read {i} rows from {file_name}')
@@ -47,22 +63,10 @@ def total_length(row):
     return len((row['Ortho'] + row['Language'] + row['Phon']).encode('utf-8'))
 
 
-# TODO: Train/test/validate splits
 class IpaDataset(Dataset):
-    def __init__(self, datapath, csv_filename, languages=None, dummy_data=False, max_length=None):
-        # TODO?: Ingest the data - https://github.com/open-dict-data/ipa-dict
+    def __init__(self, datapath, csv_filename, languages=None, max_length=None, remove_spaces=False):
         self.path = datapath
         self.filename = csv_filename
-
-        if dummy_data:
-            ortho = ['she', 'had', 'your', 'dark', 'suit', 'in', 'greasy', 'wash', 'water', 'all', 'year',
-                     'she had your', 'your dark suit', 'suit in greasy', 'greasy wash water', 'water all year']
-            phono = [u"ˈʃi", u"ˈhæd", u"ˈjɔɹ", u"ˈdɑɹk", u"ˈsut", u"ˈɪn", u"ˈɡɹisi", u"ˈwɑʃ", u"ˈwɔtɝ", u"ˈɔɫ", u"ˈjɪɹ",
-                     u"ˈʃi ˈhæd ˈjɔɹ", u"ˈjɔɹ ˈdɑɹk ˈsut", u"ˈsut ˈɪn ˈɡɹisi", u"ˈɡɹisi ˈwɑʃ ˈwɔtɝ", u"ˈwɔtɝ ˈɔɫ ˈjɪɹ"]
-            lang = ['en_US'] * len(ortho)
-            pref = [1] * len(ortho)
-            self.data = {'Ortho': ortho, 'Phono': phono, 'Language': lang, 'Pref': pref}
-            return
 
         full_path = self.path + self.filename
         # Recreate the data scv file if it does not already exist
@@ -74,8 +78,8 @@ class IpaDataset(Dataset):
             for dir_path, dir_names, filenames in os.walk(self.path):
                 for file_name in filenames:
                     lan, ext = file_name.split('.')
-                    if ext == 'txt' and (languages is None or lan in languages):
-                        new_df = pd.DataFrame(load_file_into_dataframe(self.path + file_name))
+                    if ext in ['tsv', 'txt'] and (languages is None or lan in languages):
+                        new_df = pd.DataFrame(load_file_into_dataframe(self.path + file_name, remove_spaces))
                         # Remove any item longer than the max_length
                         if max_length:
                             new_df = new_df[new_df.apply(total_length, axis=1) <= max_length]
