@@ -1,5 +1,5 @@
 import random
-
+import pycountry
 from torch.nn.utils.rnn import pad_sequence
 from torchmetrics.text import WordErrorRate
 
@@ -18,6 +18,37 @@ def pad_collate(batch):
     xx_pad = pad_sequence(xx, batch_first=True, padding_value=ord(PAD))
     yy_pad = pad_sequence(yy, batch_first=True, padding_value=ord(PAD))
     return xx_pad, yy_pad
+
+
+def bucket_and_batch(data, batch_size=64):
+    # Create buckets based on length
+    length_buckets = {}
+    for item in data:
+        length = len(item[0])
+        if length not in length_buckets:
+            length_buckets[length] = []
+        length_buckets[length].append(item)
+
+    # Sort buckets based on size from smallest to largest
+    sorted_buckets = dict(sorted(length_buckets.items()))
+
+    # Create batches
+    sorted_items = []
+    for v in sorted_buckets.values():
+        sorted_items.extend(v)
+
+    batches = []
+    for i in range(0, len(sorted_items), batch_size):
+        batches.append(sorted_items[i:i + batch_size])
+
+    # Shuffle all batches
+    random.shuffle(batches)
+    return batches
+
+
+def iso3_to_iso2(iso3_code: str) -> str:
+    language = pycountry.languages.get(alpha_3=iso3_code)
+    return language.alpha_2 if language else iso3_code
 
 
 def string_to_class(s):
@@ -50,8 +81,6 @@ def calculate_per(reference, hypothesis):
     return WordErrorRate()(ref_words, hyp_words).item()
 
 
-
-
 def get_metrics(word, model, device, beam_width=1):
     """
     For a given word, return the:
@@ -63,7 +92,6 @@ def get_metrics(word, model, device, beam_width=1):
         out = greedy
     else:
         out = model.generate_beam(word['Ortho'], device, beam_width)
-
 
     correct_language = False
     per = 1.
@@ -82,9 +110,9 @@ def get_metrics(word, model, device, beam_width=1):
         if greedy != out:
             g_lan, g_ortho, g_phon = parse_output(greedy)
             g_per = calculate_per(phon, g_phon)
-            print(f'For {word["Ortho"]}, BEAM got {"BETTER" if per<g_per else "WORSE" if per>g_per else "DIFFERENT"} '
-                  f'result\t{phon=}\t{g_phon=}\t{targ_phn}')
-
+            print(
+                f'{word["Ortho"]=}, BEAM got {"BETTER" if per < g_per else "WORSE" if per > g_per else "DIFFERENT"} '
+                f'result\t{phon=}\t{g_phon=}\t{targ_phn=}')
 
         # Print every 100 words randomly
         if random.randint(1, 100) == 60:
