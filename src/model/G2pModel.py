@@ -1,14 +1,30 @@
 import torch
 import torch.nn as nn
 from mambapy.mamba import Mamba, MambaConfig
-from torch.autograd import profiler
 
 from src.data.utils import string_to_class, BOS, EOS, PAD
 
 PROFILING = False
 
+if PROFILING:
+    from torch.autograd import profiler
 
-class ddg2pModel(nn.Module):
+
+def profile_func(name):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            if PROFILING:
+                with profiler.record_function(name):
+                    return func(*args, **kwargs)
+            else:
+                return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+class G2pModel(nn.Module):
     def __init__(self, params):
         super().__init__()
         self.embedding = nn.Embedding(256, 256)
@@ -27,24 +43,22 @@ class ddg2pModel(nn.Module):
             self.recurrence = nn.GRU(256, 1024, n_layers)
         self.probs = nn.Linear(d_model, 256, bias=False)
 
+    @profile_func('EMBEDDING')
+    def _embed(self, inputs):
+        return self.embedding(inputs)
+
+    @profile_func('RECURRENCE')
+    def _recurrence(self, inputs):
+        return self.recurrence(inputs)
+
+    @profile_func('LINEAR_OUT')
+    def _linear(self, inputs):
+        return self.probs(inputs)
+
     def forward(self, input_ids):
-        # TODO: This is nasty
-        # Do the embedding
-        if PROFILING:
-            with profiler.record_function('EMBEDDING'):
-                x = self.embedding(input_ids)
-        else:
-            x = self.embedding(input_ids)
-        if PROFILING:
-            with profiler.record_function(self.model.upper()):
-                x = self.recurrence(x)
-        else:
-            x = self.recurrence(x)
-        if PROFILING:
-            with profiler.record_function('LINEAR_OUT'):
-                x = self.probs(x)
-        else:
-            x = self.probs(x)
+        x = self._embed(input_ids)
+        x = self._recurrence(x)
+        x = self._linear(x)
         return x
 
     def generate(self,
@@ -101,7 +115,7 @@ class ddg2pModel(nn.Module):
             # Add these to the current candidate list, taking the best k overall
             values, indices = torch.topk(probs, beam_width)
             for v, i in zip(values, indices):
-                new_seq.append([torch.cat((seq, torch.unsqueeze(i,0))), (prob * v).item()])
+                new_seq.append([torch.cat((seq, torch.unsqueeze(i, 0))), (prob * v).item()])
         return sorted(new_seq, key=lambda tup: -tup[1])[:beam_width]
 
     def generate_beam(self,
