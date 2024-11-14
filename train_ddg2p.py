@@ -3,7 +3,6 @@ import os
 
 import torch
 import yaml
-from torch.profiler import profiler
 from torch.utils.data import DataLoader
 
 from src.data.utils import test_on_subset, BucketBatchSampler, pad_collate
@@ -33,12 +32,15 @@ def load_config(config_file):
     return config
 
 
+if profile:
+    from torch.profiler import profiler
+    from torch._C._profiler import ProfilerActivity
+
+
 def profile_func(func):
     def wrapper(*args):
-        from torch._C._profiler import ProfilerActivity
         activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
         sort_by_keyword = "cuda_time_total"
-
         with profiler.profile(activities=activities, with_stack=False, profile_memory=True) as prof:
             retval = func(args)
             print(prof.key_averages(group_by_stack_n=5).table(sort_by=sort_by_keyword, row_limit=10))
