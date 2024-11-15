@@ -1,8 +1,25 @@
+import logging
+import time
+from datetime import datetime
+
 import torch
 import torch.nn as nn
+from torch.utils.data import Subset
 from mambapy.mamba import Mamba, MambaConfig
 
-from src.data.utils import string_to_class, BOS, EOS, PAD
+from src.data.IpaDataset import IpaDataset
+from src.data.utils import string_to_class, BOS, EOS, PAD, BucketBatchSampler, test_on_subset, pad_collate, get_metrics
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.xpu.is_available():
+    # torch.xpu is the API for Intel GPU support
+    device = torch.device("xpu")
+else:
+    device = torch.device("CPU")
 
 PROFILING = False
 
@@ -24,6 +41,22 @@ def profile_func(name):
     return decorator
 
 
+def tensor_to_string(net_out):
+    # Step 1: Create a tensor and convert it to byte type
+    byte_tensor = net_out.byte()
+    # Step 2: Convert the byte tensor to a NumPy array
+    byte_array = byte_tensor.cpu().numpy()
+    # Step 3: Convert the NumPy array to a byte string
+    byte_string = byte_array.tobytes()
+    # Step 4: Convert the byte string to a UTF-8 string
+    try:
+        output_completions = byte_string.decode('utf-8')
+    except UnicodeDecodeError:
+        logger.warning(f'invalid utf8: {byte_string=}')
+        output_completions = byte_string.decode('utf-8', errors='replace')
+    return output_completions.rstrip(PAD)
+
+
 class G2pModel(nn.Module):
     def __init__(self, params):
         super().__init__()
@@ -40,8 +73,9 @@ class G2pModel(nn.Module):
             config = MambaConfig(d_model=d_model, n_layers=n_layers, expand_factor=expand_factor)
             self.recurrence = Mamba(config)
         elif self.model == 'gru':
-            self.recurrence = nn.GRU(256, 1024, n_layers)
-        self.probs = nn.Linear(d_model, 256, bias=False)
+            self.recurrence = nn.GRU(256, d_model, n_layers)
+        # TODO: This used to be bias=False for some reason. Why did I do that???
+        self.probs = nn.Linear(d_model, 256, bias=True)
 
     @profile_func('EMBEDDING')
     def _embed(self, inputs):
@@ -62,52 +96,56 @@ class G2pModel(nn.Module):
         return x
 
     def generate(self,
-                 prompt: str,
-                 device: torch.device,
+                 prompts: list[str],
                  max_tokens: int = 100,
                  ):
         self.eval()
 
-        b_prompt = BOS + prompt + EOS
-        b_encoded = string_to_class(b_prompt)
+        encoded_prompts = []
+        for prompt in prompts:
+            b_prompt = BOS + prompt + EOS
+            b_encoded = string_to_class(b_prompt)
+            encoded_prompts.append(torch.tensor(b_encoded, dtype=torch.long).to(device))
 
-        # Convert byte data to a numpy array
-        # TODO: Device should not be here (or even a param)
-        input_ids = torch.unsqueeze(torch.tensor(b_encoded, dtype=torch.long), 0).to(device)
-
+        # Any sequence that has terminated, we can ignore
+        done_mask = [0] * len(encoded_prompts)
         for token_n in range(max_tokens):
-            with torch.no_grad():
-                indices_to_input = input_ids
-                next_token_logits = self(indices_to_input)[:, -1]
+            # Any short sequences should be sent through the network first, so that the sequences in the batch all have the same length
+            shortest_item = min([t.size(0) for t in encoded_prompts])
+            short_mask = [0 if x.size(0) > shortest_item else 1 for x in encoded_prompts]
 
-            probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
+            mask = [short and not done for short, done in zip(short_mask, done_mask)]
 
-            next_indices = torch.argmax(probs, dim=-1)[:, None]
-            next_value = int(next_indices.squeeze())
+            filtered_tensors = [tensor for tensor, m in zip(encoded_prompts, mask) if m == 1]
 
-            input_ids = torch.cat([input_ids, next_indices], dim=1)
-            if next_value == ord(EOS) or next_value == ord(PAD):
+            if filtered_tensors == []:
                 break
 
-        # Step 1: Create a tensor and convert it to byte type
-        byte_tensor = input_ids[0].byte()
-        # Step 2: Convert the byte tensor to a NumPy array
-        byte_array = byte_tensor.cpu().numpy()
-        # Step 3: Convert the NumPy array to a byte string
-        byte_string = byte_array.tobytes()
-        # Step 4: Convert the byte string to a UTF-8 string
-        try:
-            output_completions = byte_string.decode('utf-8')
-        except UnicodeDecodeError:
-            print(f'invalid utf8: {byte_string=}')
-            output_completions = byte_string
+            with torch.no_grad():
+                token_logits = self(torch.stack(filtered_tensors))
+            next_token_logits = token_logits[:, -1]
+            probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
+            next_indices = torch.argmax(probs, dim=-1)[:, None]
+            next_value = next_indices.tolist()
 
-        return output_completions
+            update_counter = 0
+            for i, (t, m) in enumerate(zip(encoded_prompts, mask)):
+                if m == 1:
+                    encoded_prompts[i] = torch.cat([t, next_indices[update_counter]])
+                    if next_value[update_counter][0] == ord(EOS) or next_value[update_counter][0] == ord(PAD):
+                        done_mask[i] = 1
+                    update_counter += 1
+                # Add PAD to sequences that have finished decoding to keep their length in sync
+                if done_mask[i]:
+                    encoded_prompts[i] = torch.cat([t, torch.as_tensor([ord(PAD)]).to(device)])
+
+        return [tensor_to_string(id.byte()) for id in encoded_prompts]
 
     def _get_next_beam(self, sequences, beam_width):
         # List of candidate sequences, and their probabilities
         new_seq = []
         # For every sequence, run the network, and grab the k most probable continuations
+        # TODO: This can be done in one batch
         for seq, prob in sequences:
             with torch.no_grad():
                 next_token_logits = self(torch.unsqueeze(seq, 0))[:, -1]
@@ -120,7 +158,6 @@ class G2pModel(nn.Module):
 
     def generate_beam(self,
                       prompt: str,
-                      device: torch.device,
                       beam_width=5,
                       max_tokens: int = 100,
                       ):
@@ -130,7 +167,6 @@ class G2pModel(nn.Module):
         b_encoded = string_to_class(b_prompt)
 
         # Convert byte data to a numpy array, batch size 1
-        # TODO: Device should not be here (or even a param)
         input_ids = [[torch.tensor(b_encoded, dtype=torch.long).to(device), 1.]]
 
         best_terminated_sequence = None
@@ -151,19 +187,40 @@ class G2pModel(nn.Module):
                         best_terminated_sequence = seq
                         best_terminated_probability = prob
 
-        # Should have a list of sequences that have terminated
+        # Should have a list of sequences that have terminated - convert to string
+        return tensor_to_string(best_terminated_sequence)
 
-        # Step 1: Create a tensor and convert it to byte type
-        byte_tensor = best_terminated_sequence.byte()
-        # Step 2: Convert the byte tensor to a NumPy array
-        byte_array = byte_tensor.cpu().numpy()
-        # Step 3: Convert the NumPy array to a byte string
-        byte_string = byte_array.tobytes()
-        # Step 4: Convert the byte string to a UTF-8 string
-        try:
-            output_completions = byte_string.decode('utf-8')
-        except UnicodeDecodeError:
-            print(f'invalid utf8: {byte_string=}')
-            output_completions = byte_string
 
-        return output_completions
+def main():
+    logger.info(f'Device used: {device}')
+    # Run a test on the generate function for a trained network
+    path = "C:\\Users\\Richard\\Repository\\ddg2p\\experiments\\experiment_wiki_en\\mamba_model_de.ckp"
+    model_params = {'model': 'mamba', 'd_model': 256, 'n_layers': 2, 'expand_factor': 4}
+
+    model = G2pModel(model_params).to(device)
+    model.load_state_dict(torch.load(path))
+    #for out in model.generate(['Abstoßung', 'hakelig', 'jahrhundertelang', 'Umzug']):
+    #    logger.info(out)
+
+    ipa_data = IpaDataset("C:\\Users\\Richard\\Repository\\g2p_data\\wikipron\\data\\scrape\\tsv\\", 'de_data.csv',
+                          ['deu_latn_broad'], max_length=124, remove_spaces=True)
+
+    # Split into train/test/valid subsets
+    train_split = 0.8
+    test_split = 0.1
+    validation_split = 1. - train_split - test_split
+    train_subset, test_subset, valid_subset = torch.utils.data.random_split(ipa_data,
+                                                                            [train_split, test_split, validation_split],
+                                                                            generator=torch.Generator().manual_seed(1))
+
+    start_time = time.perf_counter()
+    logger.info(f'Testing starts at {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}')
+    total_ler, total_per, total_wer = test_on_subset(test_subset, model)
+
+    testing_elapsed_time = time.perf_counter() - start_time
+    logger.info(f'Testing finished at {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}\t{testing_elapsed_time=:.4f}')
+    logger.info(f'{total_ler=}\t{total_wer=}, {total_per=}')
+
+
+if __name__ == '__main__':
+    main()
