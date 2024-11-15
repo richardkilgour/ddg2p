@@ -1,4 +1,3 @@
-import logging
 import time
 from datetime import datetime
 
@@ -8,20 +7,8 @@ from torch.utils.data import Subset
 from mambapy.mamba import Mamba, MambaConfig
 
 from src.data.IpaDataset import IpaDataset
-from src.data.utils import string_to_class, BOS, EOS, PAD, BucketBatchSampler, test_on_subset, pad_collate, get_metrics
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.xpu.is_available():
-    # torch.xpu is the API for Intel GPU support
-    device = torch.device("xpu")
-else:
-    device = torch.device("CPU")
-
-PROFILING = False
+from src.data.utils import string_to_class, test_on_subset
+from src.data.DataConstants import PAD, BOS, EOS, PROFILING, logger, device
 
 if PROFILING:
     from torch.autograd import profiler
@@ -110,7 +97,8 @@ class G2pModel(nn.Module):
         # Any sequence that has terminated, we can ignore
         done_mask = [0] * len(encoded_prompts)
         for token_n in range(max_tokens):
-            # Any short sequences should be sent through the network first, so that the sequences in the batch all have the same length
+            # Any short sequences should be sent through the network first,
+            #  so that we can add to it until we have all the sequences in the batch with the same length
             shortest_item = min([t.size(0) for t in encoded_prompts])
             short_mask = [0 if x.size(0) > shortest_item else 1 for x in encoded_prompts]
 
@@ -118,7 +106,7 @@ class G2pModel(nn.Module):
 
             filtered_tensors = [tensor for tensor, m in zip(encoded_prompts, mask) if m == 1]
 
-            if filtered_tensors == []:
+            if not filtered_tensors:
                 break
 
             with torch.no_grad():
@@ -139,7 +127,7 @@ class G2pModel(nn.Module):
                 if done_mask[i]:
                     encoded_prompts[i] = torch.cat([t, torch.as_tensor([ord(PAD)]).to(device)])
 
-        return [tensor_to_string(id.byte()) for id in encoded_prompts]
+        return [tensor_to_string(ids.byte()) for ids in encoded_prompts]
 
     def _get_next_beam(self, sequences, beam_width):
         # List of candidate sequences, and their probabilities
@@ -199,8 +187,8 @@ def main():
 
     model = G2pModel(model_params).to(device)
     model.load_state_dict(torch.load(path))
-    #for out in model.generate(['Abstoßung', 'hakelig', 'jahrhundertelang', 'Umzug']):
-    #    logger.info(out)
+    for out in model.generate(['Abstoßung', 'hakelig', 'jahrhundertelang', 'Umzug']):
+        logger.info(out)
 
     ipa_data = IpaDataset("C:\\Users\\Richard\\Repository\\g2p_data\\wikipron\\data\\scrape\\tsv\\", 'de_data.csv',
                           ['deu_latn_broad'], max_length=124, remove_spaces=True)
