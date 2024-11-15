@@ -105,8 +105,9 @@ def main():
     train_it()
 
     logger.info(f'testng on validation set...')
-    correct_language, total_wer, total_per = test_on_subset(valid_subset, model, device)
-    logger.info(f'{correct_language=}\t{total_wer=}\t{total_per=}')
+    total_ler, total_wer, total_per = test_on_subset(valid_subset, model, beam_width = 3)
+    logger.info(f'{total_ler=:.2%}\t{total_wer=:.2%}\t{total_per=:.2%}')
+
 
 
 if __name__ == "__main__":
