@@ -1,7 +1,9 @@
+import logging
 import random
 import pycountry
+import torch
 from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import Sampler
+from torch.utils.data import Sampler, Subset
 from torchmetrics.text import WordErrorRate
 
 PAD = u'\x00'  # ASCII Null
@@ -9,6 +11,9 @@ BOS = u'\x02'  # ASCII Start of Text
 EOS = u'\x03'  # ASCII End of Text
 FIN = u'\x04'  # ASCII End of Transmission
 SEP = u'\x1d'  # ASCII Group Seperator (Separates language code from phonemes)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def pad_collate(batch):
@@ -22,17 +27,22 @@ def pad_collate(batch):
 
 
 class BucketBatchSampler(Sampler):
-    def __init__(self, data, batch_size):
+    def __init__(self, data, batch_size, test_set):
         super().__init__()
         self.data = data
         self.batch_size = batch_size
-        self.buckets = self.create_buckets()
+        self.buckets = self.create_buckets(test_set)
 
-    def create_buckets(self):
+    def create_buckets(self, test_set=False):
         # Create buckets based on length
         length_buckets = {}
-        for i, item in enumerate(self.data):
-            length = len(item[0])
+        for i in self.data.indices:
+            item = self.data.dataset[i][0]
+            # For testing, we only care about the length of the orthography (up to the EOS character)
+            if test_set:
+                length = torch.nonzero(item == ord(EOS)).item()
+            else:
+                length = len(item)
             if length not in length_buckets:
                 length_buckets[length] = []
             length_buckets[length].append(i)
@@ -85,7 +95,7 @@ def tensor_to_utf8(tensor):
     try:
         s = byte_string.decode('utf-8')
     except UnicodeDecodeError:
-        print(f'invalid utf8: {byte_string=}')
+        logger.warning(f'invalid utf8: {byte_string=}')
         s = byte_string
     return s
 
@@ -93,70 +103,85 @@ def tensor_to_utf8(tensor):
 def calculate_per(reference, hypothesis):
     ref_words = list(reference)
     hyp_words = list(hypothesis)
-    return WordErrorRate()(ref_words, hyp_words).item()
+    # Treating each phoneme as a 'word'
+    per = WordErrorRate()(ref_words, hyp_words).item()
+    assert 0. <= per <= 1.
+    return per
 
 
-def get_metrics(word, model, device, beam_width=1):
+def get_metrics(subset, model, beam_width=1):
     """
-    For a given word, return the:
-    Language is 100% correct -> Bool
-    Phoneme Error Rate -> float
+    For a given data subset, return:
+    Language is correct %
+    Word Error Rate %
+    Average Phoneme Error Rate
     """
-    greedy = model.generate(word['Ortho'], device)
+    words = [subset.dataset.data.iloc[i]['Ortho'] for i in subset.indices]
+    greedy = model.generate(words)
     if beam_width == 1:
         out = greedy
     else:
-        out = model.generate_beam(word['Ortho'], device, beam_width)
+        # TODO: Need to make this batch, too!
+        out = model.generate_beam(words, beam_width)
 
-    correct_language = False
-    per = 1.
-    targ_lan = word['Language']
-    targ_phn = word['Phon']
+    language_errors = 0
+    cumulative_per = 0.
+    word_errors = 0
+    target_languages = [subset.dataset.data.iloc[i]['Language'] for i in subset.indices]
+    target_phonemes = [subset.dataset.data.iloc[i]['Phon'] for i in subset.indices]
 
-    try:
-        lan, ortho, phon = parse_output(out)
+    for t_lan, ortho, t_phon, output in zip(target_languages, words, target_phonemes, out):
+        try:
+            lan, ortho_, phon = parse_output(output)
+            language_errors += t_lan != lan
 
-        correct_language = targ_lan == lan
+            # Phoneme Error rate (as a proportion of the word length)
+            per = calculate_per(phon, t_phon)
+            # Word error if any phonemes are incorrect
+            cumulative_per += per
+            word_errors += per > 0.
 
-        # Phoneme Error rate (as a proportion of the word length)
-        per = calculate_per(phon, targ_phn)
+            # TODO: Let's compare them!!!
+            if greedy != out and False:
+                g_lan, g_ortho, g_phon = parse_output(greedy)
+                g_per = calculate_per(phon, g_phon)
+                logger.info(
+                    f'{ortho=} BEAM got {"BETTER" if per < g_per else "WORSE" if per > g_per else "DIFFERENT"} '
+                    f'result\t{phon=}\t{g_phon=}\t{t_phon=}')
 
-        # Let's compare them!!!
-        if greedy != out:
-            g_lan, g_ortho, g_phon = parse_output(greedy)
-            g_per = calculate_per(phon, g_phon)
-            print(
-                f'{word["Ortho"]=}, BEAM got {"BETTER" if per < g_per else "WORSE" if per > g_per else "DIFFERENT"} '
-                f'result\t{phon=}\t{g_phon=}\t{targ_phn=}')
-
-        # Print every 100 words randomly
-        if random.randint(1, 100) == 60:
-            print(f'{ortho=}\t{lan=}\t{phon=}\t{targ_lan=}\t{targ_phn=}\t{per=}')
-    except:
-        # Early networks fail this. One epoch seems enough to get valid UTF-8
-        print(f'PARSE FAILED: {out}')
-    return correct_language, per
+            # Print every 100 words randomly
+            if random.randint(1, 100) == 60:
+                logger.info(f'{ortho=}\t{lan=}\t{phon=}\t{t_lan=}\t{t_phon=}\t{per=}')
+        except:
+            # Early networks fail this. One epoch seems enough to get (mostly) valid UTF-8
+            logger.error(f'PARSE FAILED: {out}')
+            language_errors += 1
+            cumulative_per += 1.
+            word_errors += 1
+    return language_errors / len(subset), word_errors / len(subset), cumulative_per / len(subset)
 
 
 def parse_output(out):
     eos_pos = out.index(EOS)
     sep_pos = out.index(SEP)
-    # TODO: Splitting on bytes is a pain
     ortho = out[1:eos_pos]
     lan = out[eos_pos + 1:sep_pos]
     phon = out[sep_pos + 1:-1]
     return lan, ortho, phon
 
 
-def test_on_subset(subset, model, device, beam_width=3):
-    """For a given subset, return average language, word and phoneme error rates. Lower is better."""
+def test_on_subset(test_subset, model, beam_width=1):
+    bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, test_set=True)
     total_ler = 0
     total_wer = 0
     total_per = 0
-    subset_len = len(subset)
-    for i in subset.indices:
-        correct_language, per = get_metrics(subset.dataset.data.iloc[i], model, device, beam_width)
-        total_ler += 0 if correct_language else 1
-        total_wer += 0 if per == 0. else 1
+    for batch_indices in bucket_sampler.buckets:
+        batch_subset = Subset(test_subset.dataset, batch_indices)
+        ler, wer, per = get_metrics(batch_subset, model, beam_width)
+        total_ler += ler
+        total_wer += wer
         total_per += per
-    return total_ler / subset_len, total_wer / subset_len, total_per / subset_len
+    total_ler /= len(bucket_sampler.buckets)
+    total_wer /= len(bucket_sampler.buckets)
+    total_per /= len(bucket_sampler.buckets)
+    return total_ler, total_per, total_wer
