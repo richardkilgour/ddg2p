@@ -1,19 +1,11 @@
-import logging
 import random
 import pycountry
-import torch
 from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import Sampler, Subset
+from torch.utils.data import Subset
 from torchmetrics.text import WordErrorRate
 
-PAD = u'\x00'  # ASCII Null
-BOS = u'\x02'  # ASCII Start of Text
-EOS = u'\x03'  # ASCII End of Text
-FIN = u'\x04'  # ASCII End of Transmission
-SEP = u'\x1d'  # ASCII Group Seperator (Separates language code from phonemes)
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from src.data.BucketBatchSampler import BucketBatchSampler
+from src.data.DataConstants import PAD, EOS, SEP, logger
 
 
 def pad_collate(batch):
@@ -24,51 +16,6 @@ def pad_collate(batch):
     xx_pad = pad_sequence(xx, batch_first=True, padding_value=ord(PAD))
     yy_pad = pad_sequence(yy, batch_first=True, padding_value=ord(PAD))
     return xx_pad, yy_pad
-
-
-class BucketBatchSampler(Sampler):
-    def __init__(self, data, batch_size, test_set):
-        super().__init__()
-        self.data = data
-        self.batch_size = batch_size
-        self.buckets = self.create_buckets(test_set)
-
-    def create_buckets(self, test_set=False):
-        # Create buckets based on length
-        length_buckets = {}
-        for i in self.data.indices:
-            item = self.data.dataset[i][0]
-            # For testing, we only care about the length of the orthography (up to the EOS character)
-            if test_set:
-                length = torch.nonzero(item == ord(EOS)).item()
-            else:
-                length = len(item)
-            if length not in length_buckets:
-                length_buckets[length] = []
-            length_buckets[length].append(i)
-
-        # Sort buckets based on size from smallest to largest
-        sorted_buckets = dict(sorted(length_buckets.items()))
-
-        # Create batches
-        sorted_items = []
-        for v in sorted_buckets.values():
-            sorted_items.extend(v)
-
-        batches = []
-        for i in range(0, len(sorted_items), self.batch_size):
-            batches.append(sorted_items[i:i + self.batch_size])
-
-        # Shuffle all batches
-        random.shuffle(batches)
-        return batches
-
-    def __iter__(self):
-        for batch in self.buckets:
-            yield batch
-
-    def __len__(self):
-        return len(self.buckets)
 
 
 def iso3_to_iso2(iso3_code: str) -> str:
@@ -154,7 +101,7 @@ def get_metrics(subset, model, beam_width=1):
                 logger.info(f'{ortho=}\t{lan=}\t{phon=}\t{t_lan=}\t{t_phon=}\t{per=}')
         except:
             # Early networks fail this. One epoch seems enough to get (mostly) valid UTF-8
-            logger.error(f'PARSE FAILED: {out}')
+            logger.error(f'PARSE FAILED: {output}')
             language_errors += 1
             cumulative_per += 1.
             word_errors += 1

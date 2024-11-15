@@ -1,30 +1,16 @@
 import argparse
 import os
-import logging
 
 import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from src.data.utils import test_on_subset, BucketBatchSampler, pad_collate
+from src.data.DataConstants import device, PROFILING, logger
+from src.data.DataUtils import test_on_subset, pad_collate
+from src.data.BucketBatchSampler import BucketBatchSampler
 from src.tools.G2pTrainer import G2pTrainer
 from src.data.IpaDataset import IpaDataset
 from src.model.G2pModel import G2pModel
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.xpu.is_available():
-    # torch.xpu is the API for Intel GPU support
-    device = torch.device("xpu")
-else:
-    device = torch.device("CPU")
-logger.info(f'Device used: {device}')
-
-# You want slow code? Try this to make it worse, then fix it
-profile = False
 
 
 def load_config(config_file):
@@ -42,12 +28,12 @@ def profile_func(func):
     def wrapper(*args):
         activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
         sort_by_keyword = "cuda_time_total"
-        with profiler.profile(activities=activities, with_stack=False, profile_memory=True) as prof:
+        with profiler.PROFILING(activities=activities, with_stack=False, profile_memory=True) as prof:
             retval = func(args)
             logger.info(prof.key_averages(group_by_stack_n=5).table(sort_by=sort_by_keyword, row_limit=10))
         return retval
 
-    if profile:
+    if PROFILING:
         return wrapper
     else:
         return func
@@ -100,14 +86,13 @@ def main():
                                       pin_memory=True)
         trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],
                              test_subset=test_subset)
-        trainer.train(config['training']['max_epochs'])
+        trainer.train(config['training']['max_epochs'], test_cadence=1)
 
     train_it()
 
     logger.info(f'testng on validation set...')
-    total_ler, total_wer, total_per = test_on_subset(valid_subset, model, beam_width = 3)
+    total_ler, total_wer, total_per = test_on_subset(valid_subset, model, beam_width=3)
     logger.info(f'{total_ler=:.2%}\t{total_wer=:.2%}\t{total_per=:.2%}')
-
 
 
 if __name__ == "__main__":

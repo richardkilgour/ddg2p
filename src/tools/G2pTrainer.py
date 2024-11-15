@@ -1,4 +1,3 @@
-import logging
 import threading
 import time
 from datetime import datetime
@@ -7,14 +6,13 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+
+from src.data.DataConstants import logger
 # tensorboard --logdir=logs
 # View Metrics: Open http://localhost:6006/
 
 
-from src.data.utils import test_on_subset
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from src.data.DataUtils import test_on_subset
 
 
 class G2pTrainer:
@@ -25,7 +23,7 @@ class G2pTrainer:
         self.dataloader = dataloader
         self.optimizer = optimizer
         self.device = device
-        self.out_path = out_path + self.model + ".ckp"
+        self.out_path = out_path + "mamba_model.ckp"
         # Log directory for TensorBoard
         self.writer = SummaryWriter(out_path)
         self.test_subset = test_subset
@@ -65,7 +63,7 @@ class G2pTrainer:
         else:
             for batch_num, (source, targets) in enumerate(self.dataloader):
                 start_time = time.perf_counter()
-                batch_loss = self._run_batch(source.to(self.device), targets.to(self.device))
+                batch_loss = self._run_batch(source.to(self.device), targets.to(self.device), batch_num, epoch)
                 epoch_loss += batch_loss
                 elapsed_time = time.perf_counter() - start_time
                 epoch_total_time += elapsed_time

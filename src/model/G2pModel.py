@@ -7,7 +7,7 @@ from torch.utils.data import Subset
 from mambapy.mamba import Mamba, MambaConfig
 
 from src.data.IpaDataset import IpaDataset
-from src.data.utils import string_to_class, test_on_subset
+from src.data.DataUtils import string_to_class, test_on_subset
 from src.data.DataConstants import PAD, BOS, EOS, PROFILING, logger, device
 
 if PROFILING:

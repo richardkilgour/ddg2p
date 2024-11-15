@@ -4,7 +4,8 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from src.data.utils import BOS, EOS, PAD, SEP, string_to_class, iso3_to_iso2
+from src.data.DataUtils import string_to_class, iso3_to_iso2
+from src.data.DataConstants import PAD, BOS, EOS, SEP, logger
 
 
 def wikidata_to_ISO2(name):
@@ -23,12 +24,12 @@ def load_file_into_dataframe(data_path: str, remove_spaces=False):
     # Extract the file name (without the extension) == language code
     file_name, ext = os.path.basename(data_path).split('.')
 
-    print(f'Processing {file_name}')
+    logger.info(f'Processing {file_name}')
 
     # Read the file into a temporary DataFrame. 'nan' should be read in as 'nan', not as NaN
     df = pd.read_csv(data_path, delimiter='\t', header=None, keep_default_na=False, na_values=['_'])
 
-    print(f'{df.size=}')
+    logger.debug(f'{df.size=}')
 
     if ext == 'tsv':
         # TODO: Identify wikidata formated names better. Maybe a parameter?
@@ -49,7 +50,7 @@ def load_file_into_dataframe(data_path: str, remove_spaces=False):
                 'Phon': entry.replace(" ", "").strip('/') if remove_spaces else entry.strip('/')
             })
 
-    print(f'Read {i} rows from {file_name}')
+    logger.info(f'Read {i} rows from {file_name}')
     return data
 
 
@@ -71,7 +72,7 @@ class IpaDataset(Dataset):
         full_path = self.path + self.filename
         # Recreate the data scv file if it does not already exist
         if not os.path.isfile(full_path):
-            print(f'Recreating {self.filename}. This may take a while...')
+            logger.info(f'Recreating {self.filename}. This may take a while...')
             final_df = pd.DataFrame(columns=['Language', 'Ortho', 'Pref', 'Phon'])
 
             # Each .txt file is the phonemes for a given language
@@ -84,7 +85,7 @@ class IpaDataset(Dataset):
                         if max_length:
                             new_df = new_df[new_df.apply(total_length, axis=1) <= max_length]
                         final_df = pd.concat([final_df, new_df]).reset_index(drop=True)
-            print(final_df)
+            logger.debug(final_df)
 
             # Export the DataFrame to a CSV file
             final_df.to_csv(full_path, index=False)

@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch import argmax
 
-from src.data.utils import encode_and_pad_batch, tensor_to_utf8
+from src.data.DataUtils import encode_and_pad_batch, tensor_to_utf8
 
 
 class SimpleNLPModel(nn.Module):
