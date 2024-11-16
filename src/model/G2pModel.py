@@ -3,11 +3,10 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Subset
 from mambapy.mamba import Mamba, MambaConfig
 
 from src.data.IpaDataset import IpaDataset
-from src.data.DataUtils import string_to_class, test_on_subset
+from src.data.DataUtils import string_to_class, test_on_subset, tensor_to_string
 from src.data.DataConstants import PAD, BOS, EOS, PROFILING, logger, device
 
 if PROFILING:
@@ -26,22 +25,6 @@ def profile_func(name):
         return wrapper
 
     return decorator
-
-
-def tensor_to_string(net_out):
-    # Step 1: Create a tensor and convert it to byte type
-    byte_tensor = net_out.byte()
-    # Step 2: Convert the byte tensor to a NumPy array
-    byte_array = byte_tensor.cpu().numpy()
-    # Step 3: Convert the NumPy array to a byte string
-    byte_string = byte_array.tobytes()
-    # Step 4: Convert the byte string to a UTF-8 string
-    try:
-        output_completions = byte_string.decode('utf-8')
-    except UnicodeDecodeError:
-        logger.warning(f'invalid utf8: {byte_string=}')
-        output_completions = byte_string.decode('utf-8', errors='replace')
-    return output_completions.rstrip(PAD)
 
 
 class G2pModel(nn.Module):
@@ -151,15 +134,15 @@ class G2pModel(nn.Module):
                       ):
         self.eval()
 
+        n_best = list()
+
         b_prompt = BOS + prompt + EOS
         b_encoded = string_to_class(b_prompt)
 
         # Convert byte data to a numpy array, batch size 1
         input_ids = [[torch.tensor(b_encoded, dtype=torch.long).to(device), 1.]]
 
-        best_terminated_sequence = None
-        best_terminated_probability = 0.
-        # List of candidate sequences, and their probabilities
+        # Find a list of candidate sequences, and their probabilities
         for _ in range(max_tokens):
             input_ids = self._get_next_beam(input_ids, beam_width)
             # Scan the list backwards so we can safely remove items
@@ -167,16 +150,19 @@ class G2pModel(nn.Module):
                 seq, prob = input_ids[i]
                 # We can stop tracking this if we've already found a better candidate, as probability will not increase!
                 # Or if the sequence has hit a termination character
-                if prob < best_terminated_probability or seq[-1] == ord(EOS) or seq[-1] == ord(PAD):
+                if (n_best and prob < n_best[0][1]) or seq[-1] == ord(EOS) or seq[-1] == ord(PAD):
                     # Remove it from the beam search
-                    input_ids.pop(i)
-                    # If it's the best so far, remember it
-                    if prob > best_terminated_probability:
-                        best_terminated_sequence = seq
-                        best_terminated_probability = prob
+                    finished_sequence = input_ids.pop(i)
+                    # In the case of EOS, check if it's the best so far, otherwise discard it
+                    # Save the n-best if it's too short or if it's more probably than the nth one
+                    if len(n_best) < beam_width or prob > n_best[beam_width-1][1]:
+                        n_best.append([seq, prob])
+                        # Sort by probability - highest first
+                        n_best.sort(key=lambda x: -x[1])
+                        del n_best[beam_width:]
 
         # Should have a list of sequences that have terminated - convert to string
-        return tensor_to_string(best_terminated_sequence)
+        return n_best
 
 
 def main():

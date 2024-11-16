@@ -69,7 +69,12 @@ def get_metrics(subset, model, beam_width=1):
         out = greedy
     else:
         # TODO: Need to make this batch, too!
-        out = model.generate_beam(words, beam_width)
+        out = []
+        # For now, send them one at a time and take the single best result
+        for w in words:
+            beam = model.generate_beam(w, beam_width)
+            # The first beam is the most likely
+            out.append(tensor_to_string(beam[0][0]))
 
     language_errors = 0
     cumulative_per = 0.
@@ -77,7 +82,7 @@ def get_metrics(subset, model, beam_width=1):
     target_languages = [subset.dataset.data.iloc[i]['Language'] for i in subset.indices]
     target_phonemes = [subset.dataset.data.iloc[i]['Phon'] for i in subset.indices]
 
-    for t_lan, ortho, t_phon, output in zip(target_languages, words, target_phonemes, out):
+    for t_lan, ortho, t_phon, output, g_out in zip(target_languages, words, target_phonemes, out, greedy):
         try:
             lan, ortho_, phon = parse_output(output)
             language_errors += t_lan != lan
@@ -88,9 +93,9 @@ def get_metrics(subset, model, beam_width=1):
             cumulative_per += per
             word_errors += per > 0.
 
-            # TODO: Let's compare them!!!
-            if greedy != out and False:
-                g_lan, g_ortho, g_phon = parse_output(greedy)
+            # Let's compare them!!!
+            if g_out != output:
+                g_lan, g_ortho, g_phon = parse_output(g_out)
                 g_per = calculate_per(phon, g_phon)
                 logger.info(
                     f'{ortho=} BEAM got {"BETTER" if per < g_per else "WORSE" if per > g_per else "DIFFERENT"} '
@@ -132,3 +137,19 @@ def test_on_subset(test_subset, model, beam_width=1):
     total_wer /= len(bucket_sampler.buckets)
     total_per /= len(bucket_sampler.buckets)
     return total_ler, total_per, total_wer
+
+
+def tensor_to_string(net_out):
+    # Step 1: Create a tensor and convert it to byte type
+    byte_tensor = net_out.byte()
+    # Step 2: Convert the byte tensor to a NumPy array
+    byte_array = byte_tensor.cpu().numpy()
+    # Step 3: Convert the NumPy array to a byte string
+    byte_string = byte_array.tobytes()
+    # Step 4: Convert the byte string to a UTF-8 string
+    try:
+        output_completions = byte_string.decode('utf-8')
+    except UnicodeDecodeError:
+        logger.warning(f'invalid utf8: {byte_string=}')
+        output_completions = byte_string.decode('utf-8', errors='replace')
+    return output_completions.rstrip(PAD)
