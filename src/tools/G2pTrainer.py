@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from datetime import datetime
@@ -7,13 +8,12 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from src.data.DataConstants import logger
 # tensorboard --logdir=logs
 # View Metrics: Open http://localhost:6006/
 
-
 from src.data.DataUtils import test_on_subset
 
+logger = logging.getLogger(__name__)
 
 class G2pTrainer:
     def __init__(self, model: nn.Module, dataloader: DataLoader, optimizer, device, out_path, use_rpc=False,
@@ -87,7 +87,7 @@ class G2pTrainer:
 
         return test_ler, test_wer, test_per
 
-    def train(self, max_epochs, test_cadence=3, early_stopping=2):
+    def train(self, max_epochs, test_cadence=3, early_stopping=10):
         # If using RPC
         if self.use_rpc:
             from torch.distributed import rpc
