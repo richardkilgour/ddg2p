@@ -38,26 +38,34 @@ def profile_func(func):
     else:
         return func
 
-
-def main():
-    parser = argparse.ArgumentParser(description='Experiment Configurations')
-    parser.add_argument('--config', type=str, required=True, help='Path to config file')
-    args = parser.parse_args()
-
-    config = load_config(args.config)
-
+def create_model(config):
     model_params = {'model': config['model']['model'], 'd_model': config['model']['d_model'],
                     'n_layers': config['model']['n_layers'], 'expand_factor': config['model']['expand_factor']}
     model = G2pModel(model_params).to(device)
+    # If the network exists, load it
+    if os.path.isfile(config['model']['PATH']):
+        # Load the checkpoint
+        checkpoint = torch.load(config['model']['PATH'])
+        # Load the model state dictionary
+        model.load_state_dict(checkpoint['model_state'])
+    return model
 
+def create_optimizer(model, config):
     # Define optimizer
-    # TODO: Get params from config
     if config['training']['optimizer'] == 'adam':
         optimizer = torch.optim.Adam(model.parameters())  # Otherwise defaults
     else:  # config['training']['optimizer'] == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    # If the optimizer exists, load it
+    if os.path.isfile(config['model']['PATH']):
+        # Load the checkpoint
+        checkpoint = torch.load(config['model']['PATH'])
+        # Load the optimizer state dictionary
+        optimizer.load_state_dict(checkpoint['optimizer_state'])
+    return optimizer
 
-    # Add training loop, etc.
+
+def gather_data(config):
     # Load the data: ['Language', 'Ortho', 'Pref', 'Phon']
     remove_spaces = False
     if 'remove_spaces' in config['data']:
@@ -74,11 +82,22 @@ def main():
                                                                             [train_split, test_split, validation_split],
                                                                             generator=torch.Generator().manual_seed(1))
 
-    bucket_sampler = BucketBatchSampler(train_subset, batch_size=config['training']['batch_size'])
+    return train_subset, test_subset, valid_subset
 
-    # If the network exists, load it
-    if os.path.isfile(config['model']['PATH']):
-        model.load_state_dict(torch.load(config['model']['PATH']))
+
+def main():
+    parser = argparse.ArgumentParser(description='Experiment Configurations')
+    parser.add_argument('--config', type=str, required=True, help='Path to config file')
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+
+    model = create_model(config)
+    train_subset, test_subset, valid_subset = gather_data(config)
+
+    optimizer = create_optimizer(model, config)
+
+    bucket_sampler = BucketBatchSampler(train_subset, batch_size=config['training']['batch_size'])
 
     @profile_func
     def train_it():
