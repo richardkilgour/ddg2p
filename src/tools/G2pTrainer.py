@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 from datetime import datetime
+from os.path import dirname
 
 import torch
 from torch import nn
@@ -23,9 +24,9 @@ class G2pTrainer:
         self.dataloader = dataloader
         self.optimizer = optimizer
         self.device = device
-        self.out_path = out_path + "mamba_model.ckp"
+        self.out_path = out_path
         # Log directory for TensorBoard
-        self.writer = SummaryWriter(out_path)
+        self.writer = SummaryWriter(dirname(out_path))
         self.test_subset = test_subset
         self.train_reporting_cadence = train_reporting_cadence
 
@@ -87,7 +88,7 @@ class G2pTrainer:
 
         return test_ler, test_wer, test_per
 
-    def train(self, max_epochs, test_cadence=3, early_stopping=10):
+    def train(self, max_epochs, early_stopping=10):
         # If using RPC
         if self.use_rpc:
             from torch.distributed import rpc
@@ -111,7 +112,7 @@ class G2pTrainer:
                 self.writer.add_scalar('Epoch Loss/train', loss, epoch)
 
                 # After x epochs, evaluate on the test set
-                if self.test_subset and epoch % test_cadence == 0:
+                if self.test_subset:
                     test_ler, test_wer, test_per = self._test(epoch)
                     logger.info(f'Tested {epoch=}\t{test_ler=}\t{test_wer=}\t{test_per=}')
                     if test_wer < best_test_wer or (test_wer == best_test_wer and test_per < best_test_per):
