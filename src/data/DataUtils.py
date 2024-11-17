@@ -38,18 +38,22 @@ def encode_and_pad_batch(batch, pad):
 
 
 def tensor_to_utf8(tensor):
-    byte_string = tensor.numpy().tobytes()
+    # Step 1: Move the tensor to the CPU and convert it to byte type
+    # Step 2: Convert the byte tensor to a NumPy array
+    # Step 3: Convert the NumPy array to a byte string
+    # Step 4: Convert the byte string to a UTF-8 string
+    byte_string = tensor.cpu().byte().numpy().tobytes()
     try:
-        s = byte_string.decode('utf-8')
+        s = byte_string.decode('utf-8').rstrip(PAD).rstrip(EOS)
     except UnicodeDecodeError:
-        logger.warning(f'invalid utf8: {byte_string=}')
-        s = byte_string
+        s = byte_string.decode('utf-8', errors='replace').rstrip(PAD).rstrip(EOS)
+        logger.warning(f'invalid utf8: {s}')
     return s
 
 
 def calculate_per(reference, hypothesis):
-    ref_words = list(reference)
-    hyp_words = list(hypothesis)
+    ref_words = ' '.join(list(reference))
+    hyp_words = ' '.join(list(hypothesis))
     # Treating each phoneme as a 'word'
     per = WordErrorRate()(ref_words, hyp_words).item()
     assert 0. <= per <= 1.
@@ -74,7 +78,7 @@ def get_metrics(subset, model, beam_width=1):
         for w in words:
             beam = model.generate_beam(w, beam_width)
             # The first beam is the most likely
-            out.append(tensor_to_string(beam[0][0]))
+            out.append(tensor_to_utf8(beam[0][0]))
 
     language_errors = 0
     cumulative_per = 0.
@@ -118,7 +122,7 @@ def parse_output(out):
     sep_pos = out.index(SEP)
     ortho = out[1:eos_pos]
     lan = out[eos_pos + 1:sep_pos]
-    phon = out[sep_pos + 1:-1]
+    phon = out[sep_pos + 1:].strip(EOS).strip(PAD)
     return lan, ortho, phon
 
 
@@ -139,17 +143,13 @@ def test_on_subset(test_subset, model, beam_width=1):
     return total_ler, total_per, total_wer
 
 
-def tensor_to_string(net_out):
-    # Step 1: Create a tensor and convert it to byte type
-    byte_tensor = net_out.byte()
-    # Step 2: Convert the byte tensor to a NumPy array
-    byte_array = byte_tensor.cpu().numpy()
-    # Step 3: Convert the NumPy array to a byte string
-    byte_string = byte_array.tobytes()
-    # Step 4: Convert the byte string to a UTF-8 string
-    try:
-        output_completions = byte_string.decode('utf-8')
-    except UnicodeDecodeError:
-        logger.warning(f'invalid utf8: {byte_string=}')
-        output_completions = byte_string.decode('utf-8', errors='replace')
-    return output_completions.rstrip(PAD)
+def main():
+    phon = 'beːtaːni̯ən'
+    g_phon = 'beːtaːni̯ə'
+    t_phon = 'beːtaːni̯ən'
+    logger.info(f'{calculate_per(t_phon, phon)=}')
+    logger.info(f'{calculate_per(t_phon, g_phon)=}')
+    logger.info(f'{calculate_per(g_phon, t_phon)=}')
+
+if __name__ == '__main__':
+    main()

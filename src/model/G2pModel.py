@@ -6,7 +6,7 @@ import torch.nn as nn
 from mambapy.mamba import Mamba, MambaConfig
 
 from src.data.IpaDataset import IpaDataset
-from src.data.DataUtils import string_to_class, test_on_subset, tensor_to_string
+from src.data.DataUtils import string_to_class, test_on_subset, tensor_to_utf8
 from src.data.DataConstants import PAD, BOS, EOS, PROFILING, logger, device
 
 if PROFILING:
@@ -110,7 +110,7 @@ class G2pModel(nn.Module):
                 if done_mask[i]:
                     encoded_prompts[i] = torch.cat([t, torch.as_tensor([ord(PAD)]).to(device)])
 
-        return [tensor_to_string(ids.byte()) for ids in encoded_prompts]
+        return [tensor_to_utf8(ids.byte()) for ids in encoded_prompts]
 
     def _get_next_beam(self, sequences, beam_width):
         # List of candidate sequences, and their probabilities
