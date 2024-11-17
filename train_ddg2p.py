@@ -109,6 +109,13 @@ def main():
 
     train_it()
 
+    # Reload the best network
+    assert os.path.isfile(config['model']['PATH'])
+    # Load the checkpoint
+    checkpoint = torch.load(config['model']['PATH'])
+    # Load the model state dictionary
+    model.load_state_dict(checkpoint['model_state'])
+
     logger.info(f'testng on validation set...')
     total_ler, total_wer, total_per = test_on_subset(valid_subset, model, beam_width=3)
     logger.info(f'{total_ler=:.2%}\t{total_wer=:.2%}\t{total_per=:.2%}')
