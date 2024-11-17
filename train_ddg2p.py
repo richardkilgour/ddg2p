@@ -105,7 +105,7 @@ def main():
                                       pin_memory=True)
         trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],
                              test_subset=test_subset)
-        trainer.train(config['training']['max_epochs'], test_cadence=1)
+        trainer.train(config['training']['max_epochs'])
 
     train_it()
 
