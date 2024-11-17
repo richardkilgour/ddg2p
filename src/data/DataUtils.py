@@ -1,7 +1,7 @@
 import random
 import pycountry
 from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import Subset
+from torch.utils.data import DataLoader
 from torchmetrics.text import WordErrorRate
 
 from src.data.BucketBatchSampler import BucketBatchSampler
@@ -60,14 +60,13 @@ def calculate_per(reference, hypothesis):
     return per
 
 
-def get_metrics(subset, model, beam_width=1):
+def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
     """
     For a given data subset, return:
     Language is correct %
     Word Error Rate %
     Average Phoneme Error Rate
     """
-    words = [subset.dataset.data.iloc[i]['Ortho'] for i in subset.indices]
     greedy = model.generate(words)
     if beam_width == 1:
         out = greedy
@@ -83,8 +82,6 @@ def get_metrics(subset, model, beam_width=1):
     language_errors = 0
     cumulative_per = 0.
     word_errors = 0
-    target_languages = [subset.dataset.data.iloc[i]['Language'] for i in subset.indices]
-    target_phonemes = [subset.dataset.data.iloc[i]['Phon'] for i in subset.indices]
 
     for t_lan, ortho, t_phon, output, g_out in zip(target_languages, words, target_phonemes, out, greedy):
         try:
@@ -114,7 +111,7 @@ def get_metrics(subset, model, beam_width=1):
             language_errors += 1
             cumulative_per += 1.
             word_errors += 1
-    return language_errors / len(subset), word_errors / len(subset), cumulative_per / len(subset)
+    return language_errors / len(target_languages), word_errors / len(words), cumulative_per / len(target_phonemes)
 
 
 def parse_output(out):
@@ -127,13 +124,14 @@ def parse_output(out):
 
 
 def test_on_subset(test_subset, model, beam_width=1):
-    bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, test_set=True)
+    bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, is_test_set=True)
+    dataloader = DataLoader(test_subset, batch_sampler=bucket_sampler, collate_fn=pad_collate, pin_memory=True)
     total_ler = 0
     total_wer = 0
     total_per = 0
-    for batch_indices in bucket_sampler.buckets:
-        batch_subset = Subset(test_subset.dataset, batch_indices)
-        ler, wer, per = get_metrics(batch_subset, model, beam_width)
+    for source, _ in dataloader:
+        languages, words, phonemes = zip(*[parse_output(tensor_to_utf8(item)) for item in source])
+        ler, wer, per = get_metrics(words, languages, phonemes, model, beam_width)
         total_ler += ler
         total_wer += wer
         total_per += per
