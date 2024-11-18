@@ -1,3 +1,4 @@
+import logging
 import os
 
 import pandas as pd
@@ -5,8 +6,9 @@ import torch
 from torch.utils.data import Dataset
 
 from src.data.DataUtils import string_to_class, iso3_to_iso2
-from src.data.DataConstants import PAD, BOS, EOS, SEP, logger
+from src.data.DataConstants import PAD, BOS, EOS, SEP
 
+logger = logging.getLogger(__name__)
 
 def wikidata_to_ISO2(name):
     """Wikidata style file name is language_script[_country]_transcription_filtered"""

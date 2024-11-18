@@ -1,17 +1,19 @@
 import argparse
+import logging
 import os
 
 import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from src.data.DataConstants import device, PROFILING, logger
+from src.data.DataConstants import device, PROFILING
 from src.data.DataUtils import test_on_subset, pad_collate
 from src.data.BucketBatchSampler import BucketBatchSampler
 from src.tools.G2pTrainer import G2pTrainer
 from src.data.IpaDataset import IpaDataset
 from src.model.G2pModel import G2pModel
 
+logger = logging.getLogger(__name__)
 
 def load_config(config_file):
     try:

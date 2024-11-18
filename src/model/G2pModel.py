@@ -1,3 +1,4 @@
+import logging
 import time
 from datetime import datetime
 
@@ -7,10 +8,12 @@ from mambapy.mamba import Mamba, MambaConfig
 
 from src.data.IpaDataset import IpaDataset
 from src.data.DataUtils import string_to_class, test_on_subset, tensor_to_utf8
-from src.data.DataConstants import PAD, BOS, EOS, PROFILING, logger, device
+from src.data.DataConstants import PAD, BOS, EOS, PROFILING, device
 
 if PROFILING:
     from torch.autograd import profiler
+
+logger = logging.getLogger(__name__)
 
 
 def profile_func(name):
@@ -155,7 +158,7 @@ class G2pModel(nn.Module):
                     finished_sequence = input_ids.pop(i)
                     # In the case of EOS, check if it's the best so far, otherwise discard it
                     # Save the n-best if it's too short or if it's more probably than the nth one
-                    if len(n_best) < beam_width or prob > n_best[beam_width-1][1]:
+                    if len(n_best) < beam_width or prob > n_best[beam_width - 1][1]:
                         n_best.append([seq, prob])
                         # Sort by probability - highest first
                         n_best.sort(key=lambda x: -x[1])

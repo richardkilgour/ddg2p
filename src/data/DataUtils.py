@@ -1,3 +1,4 @@
+import logging
 import random
 import pycountry
 from torch.nn.utils.rnn import pad_sequence
@@ -5,8 +6,9 @@ from torch.utils.data import DataLoader
 from torchmetrics.text import WordErrorRate
 
 from src.data.BucketBatchSampler import BucketBatchSampler
-from src.data.DataConstants import PAD, EOS, SEP, logger
+from src.data.DataConstants import PAD, EOS, SEP
 
+logger = logging.getLogger(__name__)
 
 def pad_collate(batch):
     (xx, yy) = zip(*batch)
