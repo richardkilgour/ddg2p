@@ -65,15 +65,15 @@ def total_length(row):
 
 
 class IpaDataset(Dataset):
-    def __init__(self, datapath, csv_filename, languages=None, max_length=None, remove_spaces=False):
+    def __init__(self, datapath, out_filename, splits, languages=None, max_length=None, remove_spaces=False):
         self.path = datapath
-        self.filename = csv_filename
+        self.filename = out_filename
 
         full_path = self.path + self.filename
         # Recreate the data scv file if it does not already exist
         if not os.path.isfile(full_path):
             logger.info(f'Recreating {self.filename}. This may take a while...')
-            final_df = pd.DataFrame(columns=['Language', 'Ortho', 'Pref', 'Phon'])
+            self.data = pd.DataFrame(columns=['Language', 'Ortho', 'Pref', 'Phon'])
 
             # Each .txt file is the phonemes for a given language
             for dir_path, dir_names, filenames in os.walk(self.path):
@@ -84,14 +84,22 @@ class IpaDataset(Dataset):
                         # Remove any item longer than the max_length
                         if max_length:
                             new_df = new_df[new_df.apply(total_length, axis=1) <= max_length]
-                        final_df = pd.concat([final_df, new_df]).reset_index(drop=True)
-            logger.debug(final_df)
-
+                        self.data = pd.concat([self.data, new_df]).reset_index(drop=True)
+            # TODO: (properly) NaN should actually be the string 'nan'
+            self.data.Ortho = self.data.Ortho.fillna('nan')
+            logger.debug(self.data)
+            self.train_subset, self.test_subset, self.valid_subset = torch.utils.data.random_split(self, splits,
+                                                                                                   generator=torch.Generator().manual_seed(
+                                                                                                       1))
             # Export the DataFrame to a CSV file
-            final_df.to_csv(full_path, index=False)
-        self.data = pd.read_csv(full_path)
-        # TODO: (properly) NaN should actually be the string 'nan'
-        self.data.Ortho = self.data.Ortho.fillna('nan')
+            torch.save(
+                {'data': self.data, 'training': self.train_subset, 'testing': self.test_subset, 'validation': self.valid_subset},
+                full_path)
+        all_data = torch.load(full_path)
+        self.data = all_data['data']
+        self.train_subset = all_data['training']
+        self.test_subset = all_data['testing']
+        self.valid_subset = all_data['validation']
 
     def __len__(self):
         return len(self.data)

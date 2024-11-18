@@ -38,6 +38,7 @@ def profile_func(func):
     else:
         return func
 
+
 def create_model(config):
     model_params = {'model': config['model']['model'], 'd_model': config['model']['d_model'],
                     'n_layers': config['model']['n_layers'], 'expand_factor': config['model']['expand_factor']}
@@ -49,6 +50,7 @@ def create_model(config):
         # Load the model state dictionary
         model.load_state_dict(checkpoint['model_state'])
     return model
+
 
 def create_optimizer(model, config):
     # Define optimizer
@@ -71,18 +73,15 @@ def gather_data(config):
     if 'remove_spaces' in config['data']:
         remove_spaces = config['data']['remove_spaces']
 
-    ipa_data = IpaDataset(config['data']['data_path'], config['data']['csv_name'],
-                          languages=config['data']['languages'], max_length=124, remove_spaces=remove_spaces)
-
     # Split into train/test/valid subsets
     train_split = config['data'].get('train_split', 0.6)
     test_split = config['data'].get('test_split', 0.2)
     validation_split = 1. - train_split - test_split
-    train_subset, test_subset, valid_subset = torch.utils.data.random_split(ipa_data,
-                                                                            [train_split, test_split, validation_split],
-                                                                            generator=torch.Generator().manual_seed(1))
 
-    return train_subset, test_subset, valid_subset
+    ipa_data = IpaDataset(config['data']['data_path'], config['data']['data_name'],
+                          [train_split, test_split, validation_split],
+                          languages=config['data']['languages'], max_length=124, remove_spaces=remove_spaces)
+    return ipa_data
 
 
 def main():
@@ -93,18 +92,18 @@ def main():
     config = load_config(args.config)
 
     model = create_model(config)
-    train_subset, test_subset, valid_subset = gather_data(config)
+    dataset = gather_data(config)
 
     optimizer = create_optimizer(model, config)
 
-    bucket_sampler = BucketBatchSampler(train_subset, batch_size=config['training']['batch_size'])
+    bucket_sampler = BucketBatchSampler(dataset.train_subset, batch_size=config['training']['batch_size'])
 
     @profile_func
     def train_it():
-        train_dataloader = DataLoader(train_subset, batch_sampler=bucket_sampler, collate_fn=pad_collate,
+        train_dataloader = DataLoader(dataset.train_subset, batch_sampler=bucket_sampler, collate_fn=pad_collate,
                                       pin_memory=True)
         trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],
-                             test_subset=test_subset)
+                             test_subset=dataset.test_subset)
         trainer.train(config['training']['max_epochs'])
 
     train_it()
@@ -117,7 +116,7 @@ def main():
     model.load_state_dict(checkpoint['model_state'])
 
     logger.info(f'testng on validation set...')
-    total_ler, total_wer, total_per = test_on_subset(valid_subset, model, beam_width=3)
+    total_ler, total_wer, total_per = test_on_subset(dataset.valid_subset, model, beam_width=3)
     logger.info(f'{total_ler=:.2%}\t{total_wer=:.2%}\t{total_per=:.2%}')
 
 
