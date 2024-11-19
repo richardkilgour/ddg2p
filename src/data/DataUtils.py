@@ -10,6 +10,7 @@ from src.data.DataConstants import PAD, EOS, SEP
 
 logger = logging.getLogger(__name__)
 
+
 def pad_collate(batch):
     (xx, yy) = zip(*batch)
     x_lens = [len(x) for x in xx]
@@ -53,12 +54,39 @@ def tensor_to_utf8(tensor):
     return s
 
 
+def separate_phonemes(phonemes):
+    """Space delimit all the phonemes so that they can be treated as 'words' and ready for PER calculation"""
+    char_list = list(phonemes)
+    # Merge combining diacritics et al.
+    # U+02B0 through U+02FF are Spacing Modifier Letters
+    # U+0300 through U+036F are combining diacritics, including
+    # U+035C through U+0362 which tie two characters
+    combined_list = []
+
+    i = 0
+    while i < len(char_list):
+        if i < len(char_list) - 1 and '\u02B0' <= char_list[i + 1] <= '\u036F':
+            # Handle pathological edge case where double combination is the last character
+            if i < len(char_list) - 2 and '\u035C' <= char_list[i + 1] <= '\u0362':
+                # This is followed by a double combining character
+                combined_list.append(char_list[i] + char_list[i + 1] + char_list[i + 2])
+                del char_list[i+1]
+                del char_list[i+1]
+            else:
+                # This is followed by a single combining character
+                combined_list.append(char_list[i] + char_list[i + 1])
+                del char_list[i+1]
+        else:
+            combined_list.append(char_list[i])
+        i += 1
+    return ' '.join(combined_list)
+
+
 def calculate_per(reference, hypothesis):
-    ref_words = ' '.join(list(reference))
-    hyp_words = ' '.join(list(hypothesis))
+    ref_words = separate_phonemes(reference)
+    hyp_words = separate_phonemes(hypothesis)
     # Treating each phoneme as a 'word'
     per = WordErrorRate()(ref_words, hyp_words).item()
-    assert 0. <= per <= 1.
     return per
 
 
@@ -107,9 +135,9 @@ def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
             # Print every 100 words randomly
             if random.randint(1, 100) == 60:
                 logger.info(f'{ortho=}\t{lan=}\t{phon=}\t{t_lan=}\t{t_phon=}\t{per=}')
-        except:
+        except Exception as e:
             # Early networks fail this. One epoch seems enough to get (mostly) valid UTF-8
-            logger.error(f'PARSE FAILED: {output}')
+            logger.error(f"An exception occurred for {output}: {type(e).__name__} - {e}")
             language_errors += 1
             cumulative_per += 1.
             word_errors += 1
@@ -128,9 +156,9 @@ def parse_output(out):
 def test_on_subset(test_subset, model, beam_width=1):
     bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, is_test_set=True)
     dataloader = DataLoader(test_subset, batch_sampler=bucket_sampler, collate_fn=pad_collate, pin_memory=True)
-    total_ler = 0
-    total_wer = 0
-    total_per = 0
+    total_ler = 0.
+    total_wer = 0.
+    total_per = 0.
     for source, _ in dataloader:
         languages, words, phonemes = zip(*[parse_output(tensor_to_utf8(item)) for item in source])
         ler, wer, per = get_metrics(words, languages, phonemes, model, beam_width)
@@ -140,7 +168,7 @@ def test_on_subset(test_subset, model, beam_width=1):
     total_ler /= len(bucket_sampler.buckets)
     total_wer /= len(bucket_sampler.buckets)
     total_per /= len(bucket_sampler.buckets)
-    return total_ler, total_per, total_wer
+    return total_ler, total_wer, total_per
 
 
 def main():
@@ -150,6 +178,7 @@ def main():
     logger.info(f'{calculate_per(t_phon, phon)=}')
     logger.info(f'{calculate_per(t_phon, g_phon)=}')
     logger.info(f'{calculate_per(g_phon, t_phon)=}')
+
 
 if __name__ == '__main__':
     main()
