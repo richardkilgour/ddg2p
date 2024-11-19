@@ -4,6 +4,7 @@ import os
 
 import torch
 import yaml
+from numpy import Inf
 from torch.utils.data import DataLoader
 
 from src.data.DataConstants import device, PROFILING
@@ -14,6 +15,7 @@ from src.data.IpaDataset import IpaDataset
 from src.model.G2pModel import G2pModel
 
 logger = logging.getLogger(__name__)
+
 
 def load_config(config_file):
     try:
@@ -41,16 +43,27 @@ def profile_func(func):
         return func
 
 
+def restore_cp(cp_file, model, optimizer):
+    # Load the checkpoint
+    checkpoint = torch.load(cp_file)
+    # Load the model state dictionary
+    model.load_state_dict(checkpoint['model_state'])
+    # Load the optimizer state dictionary
+    optimizer.load_state_dict(checkpoint['optimizer_state'])
+    training_metrics = {
+        'epoch': checkpoint['epoch'],
+        'LER': checkpoint['LER'],
+        'WER': checkpoint['WER'],
+        'PER': checkpoint['PER'],
+        'train_loss': checkpoint['train_loss'],
+        'no_improvement_count': checkpoint['no_improvement_count'],
+    }
+    return training_metrics
+
 def create_model(config):
     model_params = {'model': config['model']['model'], 'd_model': config['model']['d_model'],
                     'n_layers': config['model']['n_layers'], 'expand_factor': config['model']['expand_factor']}
     model = G2pModel(model_params).to(device)
-    # If the network exists, load it
-    if os.path.isfile(config['model']['PATH']):
-        # Load the checkpoint
-        checkpoint = torch.load(config['model']['PATH'])
-        # Load the model state dictionary
-        model.load_state_dict(checkpoint['model_state'])
     return model
 
 
@@ -60,12 +73,6 @@ def create_optimizer(model, config):
         optimizer = torch.optim.Adam(model.parameters())  # Otherwise defaults
     else:  # config['training']['optimizer'] == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    # If the optimizer exists, load it
-    if os.path.isfile(config['model']['PATH']):
-        # Load the checkpoint
-        checkpoint = torch.load(config['model']['PATH'])
-        # Load the optimizer state dictionary
-        optimizer.load_state_dict(checkpoint['optimizer_state'])
     return optimizer
 
 
@@ -98,6 +105,25 @@ def main():
 
     optimizer = create_optimizer(model, config)
 
+    # Set any default training metrics
+    training_metrics = {
+        'epoch': 0,
+        'LER': 1.1,
+        'WER': 1.1,
+        'PER': 1.1,
+        'train_loss': Inf,
+        'no_improvement_count': 0,
+    }
+
+    # Restore any checkpoint that is found
+    cp_file = config['model']['PATH'] + 'best_mamba_model.cp'
+    if os.path.isfile(cp_file):
+        training_metrics = restore_cp(cp_file, model, optimizer)
+    else:
+        cp_file = config['model']['PATH'] + 'latest_mamba_model.cp'
+        if os.path.isfile(cp_file):
+            training_metrics = restore_cp(cp_file, model, optimizer)
+
     bucket_sampler = BucketBatchSampler(dataset.train_subset, batch_size=config['training']['batch_size'])
 
     @profile_func
@@ -106,16 +132,14 @@ def main():
                                       pin_memory=True)
         trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],
                              test_subset=dataset.test_subset)
-        trainer.train(config['training']['max_epochs'])
+        trainer.train(config['training']['max_epochs'], training_metrics=training_metrics)
 
     train_it()
 
     # Reload the best network
-    assert os.path.isfile(config['model']['PATH'])
-    # Load the checkpoint
-    checkpoint = torch.load(config['model']['PATH'])
-    # Load the model state dictionary
-    model.load_state_dict(checkpoint['model_state'])
+    cp_file = config['model']['PATH'] + 'best_mamba_model.cp'
+    assert os.path.isfile(cp_file)
+    restore_cp(cp_file, model, optimizer)
 
     logger.info(f'testng on validation set...')
     total_ler, total_wer, total_per = test_on_subset(dataset.valid_subset, model, beam_width=3)

@@ -16,6 +16,7 @@ from src.data.DataUtils import test_on_subset
 
 logger = logging.getLogger(__name__)
 
+
 class G2pTrainer:
     def __init__(self, model: nn.Module, dataloader: DataLoader, optimizer, device, out_path, use_rpc=False,
                  test_subset=None, train_reporting_cadence=100):
@@ -70,7 +71,8 @@ class G2pTrainer:
                 epoch_total_time += elapsed_time
                 if batch_num % self.train_reporting_cadence == 0:
                     timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                    logger.info(f'{timestamp}\t{epoch=}\t{batch_num=}\t{batch_loss=}\t{source.shape=}\t{elapsed_time:.4f}')
+                    logger.info(
+                        f'{timestamp}\t{epoch=}\t{batch_num=}\t{batch_loss=}\t{source.shape=}\t{elapsed_time:.4f}')
         logger.info(f'{epoch_total_time=:.4f}')
         return epoch_loss / len(self.dataloader)
 
@@ -88,7 +90,11 @@ class G2pTrainer:
 
         return test_ler, test_wer, test_per
 
-    def train(self, max_epochs, early_stopping=10):
+    def train(self, max_epochs, training_metrics, early_stopping=10):
+        epoch = training_metrics['epoch']
+        best_test_wer = training_metrics['WER']
+        no_improvement_count = training_metrics['no_improvement_count']
+
         # If using RPC
         if self.use_rpc:
             from torch.distributed import rpc
@@ -102,10 +108,7 @@ class G2pTrainer:
 
             worker1.join()
         else:
-            best_test_wer = 1.1  # 110% ensures the first epoch will improve and net will be saved
-            best_test_per = 1.1
-            no_improvement_count = 0
-            for epoch in range(max_epochs):
+            while epoch < max_epochs:
                 loss = self._run_epoch(epoch)
 
                 # Add epoch-level stats
@@ -119,13 +122,32 @@ class G2pTrainer:
                         logger.info(f'New best {test_wer=}')
                         no_improvement_count = 0
                         best_test_wer = test_wer
-                        torch.save(
-                            {'model_state': self.model.state_dict(), 'optimizer_state': self.optimizer.state_dict()},
-                            self.out_path)
+                        torch.save({
+                            'epoch': epoch,
+                            'model_state': self.model.state_dict(),
+                            'optimizer_state': self.optimizer.state_dict(),
+                            'LER': test_ler,
+                            'WER': test_wer,
+                            'PER': test_per,
+                            'train_loss': loss,
+                            'no_improvement_count': no_improvement_count,
+                        }, self.out_path + 'best_mamba_model.cp')
 
                     else:
                         no_improvement_count += 1
                         logger.warning(f'{test_wer=} is not better than {best_test_wer} - {no_improvement_count=}')
+                        torch.save({
+                            'epoch': epoch,
+                            'model_state': self.model.state_dict(),
+                            'optimizer_state': self.optimizer.state_dict(),
+                            'LER': test_ler,
+                            'WER': test_wer,
+                            'PER': test_per,
+                            'train_loss': loss,
+                            'no_improvement_count': no_improvement_count,
+                        }, self.out_path + 'latest_mamba_model.cp')
+
                     if no_improvement_count > early_stopping:
                         logger.warning(f'OVERLEARNING??? after {epoch=}. ABORT training')
                         break
+                epoch += 1
