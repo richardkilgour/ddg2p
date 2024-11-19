@@ -93,6 +93,7 @@ class G2pTrainer:
     def train(self, max_epochs, training_metrics, early_stopping=10):
         epoch = training_metrics['epoch']
         best_test_wer = training_metrics['WER']
+        best_test_per = training_metrics['PER']
         no_improvement_count = training_metrics['no_improvement_count']
 
         # If using RPC
@@ -119,7 +120,7 @@ class G2pTrainer:
                     test_ler, test_wer, test_per = self._test(epoch)
                     logger.info(f'Tested {epoch=}\t{test_ler=:.5%}\t{test_wer=:.5%}\t{test_per=:.5%}')
                     if test_wer < best_test_wer or (test_wer == best_test_wer and test_per < best_test_per):
-                        logger.info(f'New best {test_wer=}')
+                        logger.info(f'New best {test_wer=:.5%}')
                         no_improvement_count = 0
                         best_test_wer = test_wer
                         torch.save({
