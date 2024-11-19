@@ -119,7 +119,7 @@ def main():
 
     logger.info(f'testng on validation set...')
     total_ler, total_wer, total_per = test_on_subset(dataset.valid_subset, model, beam_width=3)
-    logger.info(f'{total_ler=:.2%}\t{total_wer=:.2%}\t{total_per=:.2%}')
+    logger.info(f'{total_ler=:.5%}\t{total_wer=:.5%}\t{total_per=:.5%}')
 
 
 if __name__ == "__main__":

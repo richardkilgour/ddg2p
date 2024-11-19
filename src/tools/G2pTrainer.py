@@ -82,9 +82,9 @@ class G2pTrainer:
         logger.info(f'Testing finished at {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}\t{testing_elapsed_time=:.4f}')
 
         # Log test metrics
-        self.writer.add_scalar('Accuracy/test_ler', test_ler, epoch)
-        self.writer.add_scalar('Accuracy/test_wer', test_wer, epoch)
-        self.writer.add_scalar('Accuracy/test_per', test_per, epoch)
+        self.writer.add_scalar('Accuracy/test language error rate', test_ler, epoch)
+        self.writer.add_scalar('Accuracy/test word error rate', test_wer, epoch)
+        self.writer.add_scalar('Accuracy/test phoneme error rate', test_per, epoch)
 
         return test_ler, test_wer, test_per
 
@@ -114,7 +114,7 @@ class G2pTrainer:
                 # After x epochs, evaluate on the test set
                 if self.test_subset:
                     test_ler, test_wer, test_per = self._test(epoch)
-                    logger.info(f'Tested {epoch=}\t{test_ler=}\t{test_wer=}\t{test_per=}')
+                    logger.info(f'Tested {epoch=}\t{test_ler=:.5%}\t{test_wer=:.5%}\t{test_per=:.5%}')
                     if test_wer < best_test_wer or (test_wer == best_test_wer and test_per < best_test_per):
                         logger.info(f'New best {test_wer=}')
                         no_improvement_count = 0
