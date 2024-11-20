@@ -11,7 +11,7 @@ from src.data.DataConstants import device, PROFILING
 from src.data.DataUtils import test_on_subset, pad_collate
 from src.data.BucketBatchSampler import BucketBatchSampler
 from src.tools.G2pTrainer import G2pTrainer
-from src.data.IpaDataset import IpaDataset
+from src.data.IpaDataset import IpaDataset, IpaDatasetCollection
 from src.model.G2pModel import G2pModel
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ def restore_cp(cp_file, model, optimizer):
     }
     return training_metrics
 
+
 def create_model(config):
     model_params = {'model': config['model']['model'], 'd_model': config['model']['d_model'],
                     'n_layers': config['model']['n_layers'], 'expand_factor': config['model']['expand_factor']}
@@ -82,14 +83,17 @@ def gather_data(config):
     if 'remove_spaces' in config['data']:
         remove_spaces = config['data']['remove_spaces']
 
-    # Split into train/test/valid subsets
-    train_split = config['data'].get('train_split', 0.6)
-    test_split = config['data'].get('test_split', 0.2)
-    validation_split = 1. - train_split - test_split
+    if isinstance(config['data']['data_name'], list):
+        ipa_data = IpaDatasetCollection(config['data']['data_path'], config['data']['data_name'])
+    else:
+        # Split into train/test/valid subsets
+        train_split = config['data'].get('train_split', 0.6)
+        test_split = config['data'].get('test_split', 0.2)
+        validation_split = 1. - train_split - test_split
 
-    ipa_data = IpaDataset(config['data']['data_path'], config['data']['data_name'],
-                          [train_split, test_split, validation_split],
-                          languages=config['data']['languages'], max_length=124, remove_spaces=remove_spaces)
+        ipa_data = IpaDataset(config['data']['data_path'], config['data']['data_name'],
+                              [train_split, test_split, validation_split],
+                              languages=config['data']['languages'], max_length=124, remove_spaces=remove_spaces)
     return ipa_data
 
 
@@ -124,10 +128,12 @@ def main():
         if os.path.isfile(cp_file):
             training_metrics = restore_cp(cp_file, model, optimizer)
 
+    logger.debug(f'Creating buckets...')
     bucket_sampler = BucketBatchSampler(dataset.train_subset, batch_size=config['training']['batch_size'])
 
     @profile_func
     def train_it():
+        logger.debug(f'Training starts...')
         train_dataloader = DataLoader(dataset.train_subset, batch_sampler=bucket_sampler, collate_fn=pad_collate,
                                       pin_memory=True)
         trainer = G2pTrainer(model, train_dataloader, optimizer, device, config['model']['PATH'],

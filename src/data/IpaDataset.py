@@ -3,14 +3,15 @@ import os
 
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 
 from src.data.DataUtils import string_to_class, iso3_to_iso2
 from src.data.DataConstants import PAD, BOS, EOS, SEP
 
 logger = logging.getLogger(__name__)
 
-def wikidata_to_ISO2(name):
+
+def wikidata_to_iso2(name):
     """Wikidata style file name is language_script[_country]_transcription_filtered"""
     components = name.split('_')
     language = iso3_to_iso2(components[0])
@@ -35,7 +36,7 @@ def load_file_into_dataframe(data_path: str, remove_spaces=False):
 
     if ext == 'tsv':
         # TODO: Identify wikidata formated names better. Maybe a parameter?
-        language_code = wikidata_to_ISO2(file_name)
+        language_code = wikidata_to_iso2(file_name)
     else:
         language_code = file_name
 
@@ -95,7 +96,8 @@ class IpaDataset(Dataset):
                                                                                                        1))
             # Export the DataFrame to a CSV file
             torch.save(
-                {'data': self.data, 'training': self.train_subset, 'testing': self.test_subset, 'validation': self.valid_subset},
+                {'data': self.data, 'training': self.train_subset, 'testing': self.test_subset,
+                 'validation': self.valid_subset},
                 full_path)
         all_data = torch.load(full_path)
         self.data = all_data['data']
@@ -113,3 +115,38 @@ class IpaDataset(Dataset):
         x_enc = string_to_class(source)
         t_enc = string_to_class(targets)
         return torch.tensor(x_enc, dtype=torch.long), torch.tensor(t_enc, dtype=torch.long)
+
+
+class IpaDatasetCollection(Dataset):
+    def __init__(self, datapath, filenames):
+        # Load a bunch of existing IpaDatasets
+        self.datasets = []
+        for name in filenames:
+            assert os.path.isfile(datapath + name)
+            self.datasets.append(IpaDataset(datapath, name, splits=None))
+
+        # We need to offset the subset indices
+
+        # TODO: Should reference the indices, not copy. Waste memory...
+        self.train_subset = Subset(self, [])
+        self.test_subset = Subset(self, [])
+        self.valid_subset = Subset(self, [])
+        offset = 0
+        for dataset in self.datasets:
+            self.train_subset.indices.extend([idx + offset for idx in dataset.train_subset.indices])
+            self.test_subset.indices.extend([idx + offset for idx in dataset.test_subset.indices])
+            self.valid_subset.indices.extend([idx + offset for idx in dataset.valid_subset.indices])
+            offset += len(dataset)
+        self.train_subset.dataset = self
+        self.test_subset.dataset = self
+        self.valid_subset.dataset = self
+
+    def __len__(self):
+        return sum(len(d) for d in self.datasets)
+
+    def __getitem__(self, idx):
+        for d in self.datasets:
+            if idx < len(d):
+                return d[idx]
+            else:
+                idx -= len(d)
