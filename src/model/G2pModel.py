@@ -191,11 +191,16 @@ def main():
 
     start_time = time.perf_counter()
     logger.info(f'Testing starts at {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}')
-    language_cm, total_per, total_wer = test_on_subset(test_subset, model)
+    language_cm, total_per = test_on_subset(test_subset, model)
     total_ler = 1. - language_cm.true_positive_rate()
     testing_elapsed_time = time.perf_counter() - start_time
     logger.info(f'Testing finished at {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}\t{testing_elapsed_time=:.4f}')
-    logger.info(f'{total_ler=}\t{total_wer=}, {total_per=}')
+    logger.info(f'{language_cm}')
+    for k, v in total_per:
+        per = sum(v) / len(v)
+        total_wer = [1 if p > 0 else 0 for p in v]
+        wer = sum(total_wer) / len(total_wer)
+        logger.info(f'{k}\t{total_ler=}\t{wer=}, {per=}')
 
 
 if __name__ == '__main__':

@@ -95,9 +95,8 @@ def calculate_per(reference, hypothesis):
 def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
     """
     For a given data subset, return:
-    Language is correct %
-    Word Error Rate %
-    Average Phoneme Error Rate
+    Confusion Matrix for Language guessing
+    Dictionary of (List of) Phoneme Error Rates per language. eg: {'en_UK': [0., 0., 0.75, 0.54, 0.62]
     """
     greedy = model.generate(words)
     if beam_width == 1:
@@ -111,12 +110,11 @@ def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
             # The first beam is the most likely
             out.append(tensor_to_utf8(beam[0][0]))
 
-    cumulative_per = 0.
-    word_errors = 0
-
     # Initialise the confusion Matrix
     unique_languages = list(set(target_languages))
     confusion_matrix = ConfusionMatrix(unique_languages)
+
+    language_per = dict.fromkeys(unique_languages, [])
 
     for t_lan, ortho, t_phon, output, g_out in zip(target_languages, words, target_phonemes, out, greedy):
         try:
@@ -127,8 +125,7 @@ def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
             # Phoneme Error rate (as a proportion of the word length)
             per = calculate_per(phon, t_phon)
             # Word error if any phonemes are incorrect
-            cumulative_per += per
-            word_errors += per > 0.
+            language_per[t_lan].append(per)
 
             # Let's compare them!!!
             if g_out != output:
@@ -145,9 +142,8 @@ def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
             # Early networks fail this. One epoch seems enough to get (mostly) valid UTF-8
             logger.error(f"An exception occurred for {output}: {type(e).__name__} - {e}")
             confusion_matrix.update('ERROR', t_lan)
-            cumulative_per += 1.
-            word_errors += 1
-    return confusion_matrix, word_errors / len(words), cumulative_per / len(target_phonemes)
+            language_per[t_lan].append(1.)
+    return confusion_matrix, language_per
 
 
 def parse_output(out):
@@ -159,6 +155,16 @@ def parse_output(out):
     return lan, ortho, phon
 
 
+def merge_dictionaries(dict1, dict2):
+    merged_dict = dict1.copy()
+    for key, value in dict2.items():
+        if key in merged_dict:
+            merged_dict[key].extend(value)
+        else:
+            merged_dict[key] = value
+    return merged_dict
+
+
 def test_on_subset(test_subset, model, beam_width=1, with_language=False):
     if with_language:
         bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, delimiter=SEP)
@@ -166,20 +172,16 @@ def test_on_subset(test_subset, model, beam_width=1, with_language=False):
         bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, delimiter=EOS)
     dataloader = DataLoader(test_subset, batch_sampler=bucket_sampler, collate_fn=pad_collate, pin_memory=True)
     language_cm = None
-    total_wer = 0.
-    total_per = 0.
+    total_per = {}
     for source, _ in dataloader:
         languages, words, phonemes = zip(*[parse_output(tensor_to_utf8(item)) for item in source])
-        lan_cm, wer, per = get_metrics(words, languages, phonemes, model, beam_width)
+        lan_cm, per = get_metrics(words, languages, phonemes, model, beam_width)
         if language_cm:
             language_cm.merge(lan_cm)
         else:
             language_cm = lan_cm
-        total_wer += wer
-        total_per += per
-    total_wer /= len(bucket_sampler.buckets)
-    total_per /= len(bucket_sampler.buckets)
-    return language_cm, total_wer, total_per
+        total_per = merge_dictionaries(total_per, per)
+    return language_cm, total_per
 
 
 def main():

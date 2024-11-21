@@ -59,7 +59,7 @@ class G2pTrainer:
     def _test(self, epoch):
         start_time = time.perf_counter()
         logger.info(f'Testing starts at {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}')
-        language_cm, test_wer, test_per = test_on_subset(self.test_subset, self.model, beam_width=1)
+        language_cm, test_per = test_on_subset(self.test_subset, self.model, beam_width=1)
         test_ler = 1. - language_cm.true_positive_rate()
         testing_elapsed_time = time.perf_counter() - start_time
         logger.info(f'Testing finished at {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}\t{testing_elapsed_time=:.4f}')
@@ -69,7 +69,7 @@ class G2pTrainer:
         self.writer.add_scalar('Accuracy/test word error rate', test_wer, epoch)
         self.writer.add_scalar('Accuracy/test phoneme error rate', test_per, epoch)
 
-        return language_cm, test_wer, test_per
+        return language_cm, test_per
 
     def train(self, max_epochs, training_metrics, early_stopping=10):
         epoch = training_metrics['epoch']
