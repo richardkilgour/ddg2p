@@ -3,24 +3,22 @@ import random
 import torch
 from torch.utils.data import Sampler, Subset
 
-from src.data.DataConstants import EOS
-
 
 class BucketBatchSampler(Sampler):
-    def __init__(self, data: Subset, batch_size: int, is_test_set=False):
+    def __init__(self, data: Subset, batch_size: int, delimiter=None):
         super().__init__()
         self.data = data
         self.batch_size = batch_size
-        self.buckets = self.create_buckets(is_test_set)
+        self.buckets = self.create_buckets(delimiter)
 
-    def create_buckets(self, test_set: bool):
+    def create_buckets(self, delimiter):
         # Create buckets based on length
         length_buckets = {}
         for i, j in enumerate(self.data.indices):
             item = self.data.dataset[j][0]
             # For test sets, we only care about the length of the orthography (i.e. up to the EOS character)
-            if test_set:
-                length = torch.nonzero(item == ord(EOS)).item()
+            if delimiter:
+                length = torch.nonzero(item == ord(delimiter)).item()
             else:
                 length = len(item)
             if length not in length_buckets:
