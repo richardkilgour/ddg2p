@@ -148,8 +148,11 @@ def main():
     restore_cp(cp_file, model, optimizer)
 
     logger.info(f'testng on validation set...')
-    total_ler, total_wer, total_per = test_on_subset(dataset.valid_subset, model, beam_width=3)
+    language_cm, total_wer, total_per = test_on_subset(dataset.valid_subset, model, beam_width=1)
+    total_ler = 1. - language_cm.true_positive_rate()
+
     logger.info(f'{total_ler=:.5%}\t{total_wer=:.5%}\t{total_per=:.5%}')
+    logger.info(f'{language_cm}')
 
 
 if __name__ == "__main__":

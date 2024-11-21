@@ -155,7 +155,7 @@ class G2pModel(nn.Module):
                 # Or if the sequence has hit a termination character
                 if (n_best and prob < n_best[0][1]) or seq[-1] == ord(EOS) or seq[-1] == ord(PAD):
                     # Remove it from the beam search
-                    finished_sequence = input_ids.pop(i)
+                    input_ids.pop(i)
                     # In the case of EOS, check if it's the best so far, otherwise discard it
                     # Save the n-best if it's too short or if it's more probably than the nth one
                     if len(n_best) < beam_width or prob > n_best[beam_width - 1][1]:
@@ -164,7 +164,6 @@ class G2pModel(nn.Module):
                         n_best.sort(key=lambda x: -x[1])
                         del n_best[beam_width:]
 
-        # Should have a list of sequences that have terminated - convert to string
         return n_best
 
 
@@ -192,8 +191,8 @@ def main():
 
     start_time = time.perf_counter()
     logger.info(f'Testing starts at {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}')
-    total_ler, total_per, total_wer = test_on_subset(test_subset, model)
-
+    language_cm, total_per, total_wer = test_on_subset(test_subset, model)
+    total_ler = 1. - language_cm.true_positive_rate()
     testing_elapsed_time = time.perf_counter() - start_time
     logger.info(f'Testing finished at {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}\t{testing_elapsed_time=:.4f}')
     logger.info(f'{total_ler=}\t{total_wer=}, {total_per=}')

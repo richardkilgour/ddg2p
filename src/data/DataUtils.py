@@ -1,11 +1,13 @@
 import logging
 import random
+
 import pycountry
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 from torchmetrics.text import WordErrorRate
 
 from src.data.BucketBatchSampler import BucketBatchSampler
+from src.data.ConfusionMatrix import ConfusionMatrix
 from src.data.DataConstants import PAD, EOS, SEP
 
 logger = logging.getLogger(__name__)
@@ -70,12 +72,12 @@ def separate_phonemes(phonemes):
             if i < len(char_list) - 2 and '\u035C' <= char_list[i + 1] <= '\u0362':
                 # This is followed by a double combining character
                 combined_list.append(char_list[i] + char_list[i + 1] + char_list[i + 2])
-                del char_list[i+1]
-                del char_list[i+1]
+                del char_list[i + 1]
+                del char_list[i + 1]
             else:
                 # This is followed by a single combining character
                 combined_list.append(char_list[i] + char_list[i + 1])
-                del char_list[i+1]
+                del char_list[i + 1]
         else:
             combined_list.append(char_list[i])
         i += 1
@@ -109,14 +111,18 @@ def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
             # The first beam is the most likely
             out.append(tensor_to_utf8(beam[0][0]))
 
-    language_errors = 0
     cumulative_per = 0.
     word_errors = 0
+
+    # Initialise the confusion Matrix
+    unique_languages = list(set(target_languages))
+    confusion_matrix = ConfusionMatrix(unique_languages)
 
     for t_lan, ortho, t_phon, output, g_out in zip(target_languages, words, target_phonemes, out, greedy):
         try:
             lan, ortho_, phon = parse_output(output)
-            language_errors += t_lan != lan
+
+            confusion_matrix.update(lan, t_lan)
 
             # Phoneme Error rate (as a proportion of the word length)
             per = calculate_per(phon, t_phon)
@@ -138,10 +144,10 @@ def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
         except Exception as e:
             # Early networks fail this. One epoch seems enough to get (mostly) valid UTF-8
             logger.error(f"An exception occurred for {output}: {type(e).__name__} - {e}")
-            language_errors += 1
+            confusion_matrix.update('ERROR', t_lan)
             cumulative_per += 1.
             word_errors += 1
-    return language_errors / len(target_languages), word_errors / len(words), cumulative_per / len(target_phonemes)
+    return confusion_matrix, word_errors / len(words), cumulative_per / len(target_phonemes)
 
 
 def parse_output(out):
@@ -153,22 +159,27 @@ def parse_output(out):
     return lan, ortho, phon
 
 
-def test_on_subset(test_subset, model, beam_width=1):
-    bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, is_test_set=True)
+def test_on_subset(test_subset, model, beam_width=1, with_language=False):
+    if with_language:
+        bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, delimiter=SEP)
+    else:
+        bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, delimiter=EOS)
     dataloader = DataLoader(test_subset, batch_sampler=bucket_sampler, collate_fn=pad_collate, pin_memory=True)
-    total_ler = 0.
+    language_cm = None
     total_wer = 0.
     total_per = 0.
     for source, _ in dataloader:
         languages, words, phonemes = zip(*[parse_output(tensor_to_utf8(item)) for item in source])
-        ler, wer, per = get_metrics(words, languages, phonemes, model, beam_width)
-        total_ler += ler
+        lan_cm, wer, per = get_metrics(words, languages, phonemes, model, beam_width)
+        if language_cm:
+            language_cm.merge(lan_cm)
+        else:
+            language_cm = lan_cm
         total_wer += wer
         total_per += per
-    total_ler /= len(bucket_sampler.buckets)
     total_wer /= len(bucket_sampler.buckets)
     total_per /= len(bucket_sampler.buckets)
-    return total_ler, total_wer, total_per
+    return language_cm, total_wer, total_per
 
 
 def main():
