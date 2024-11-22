@@ -8,7 +8,7 @@ from torchmetrics.text import WordErrorRate
 
 from src.data.BucketBatchSampler import BucketBatchSampler
 from src.data.ConfusionMatrix import ConfusionMatrix
-from src.data.DataConstants import PAD, EOS, SEP
+from src.data.DataConstants import PAD, EOS, SEP, BOS
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
                 g_lan, g_ortho, g_phon = parse_output(g_out)
                 g_per = calculate_per(phon, g_phon)
                 logger.info(
-                    f'{ortho=} BEAM got {"BETTER" if per < g_per else "WORSE" if per > g_per else "DIFFERENT"} '
+                    f'{ortho=} BEAM got {("PERFECT" if (per==0.) else "BETTER") if per < g_per else ("WRONG" if g_per==0. else "WORSE") if per > g_per else "DIFFERENT"} '
                     f'result\t{phon=}\t{g_phon=}\t{t_phon=}')
 
             # Print every 100 words randomly
@@ -175,6 +175,9 @@ def test_on_subset(test_subset, model, beam_width=1, with_language=False):
     total_per = {}
     for source, _ in dataloader:
         languages, words, phonemes = zip(*[parse_output(tensor_to_utf8(item)) for item in source])
+        if with_language:
+            # Words are the orthography plus the language code
+            words = [BOS + ortho + EOS + lang + SEP for ortho, lang in zip(words, languages)]
         lan_cm, per = get_metrics(words, languages, phonemes, model, beam_width)
         if language_cm:
             language_cm.merge(lan_cm)
