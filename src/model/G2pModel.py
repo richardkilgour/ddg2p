@@ -1,3 +1,4 @@
+import csv
 import logging
 import time
 from datetime import datetime
@@ -33,12 +34,10 @@ def profile_func(name):
 class G2pModel(nn.Module):
     def __init__(self, params):
         super().__init__()
-        self.embedding = nn.Embedding(256, 256)
-        # Initialize the embedding weights to be an identity matrix
-        with torch.no_grad():
-            self.embedding.weight.copy_(torch.eye(256, 256))
 
         d_model = params['d_model']
+        self.embedding = nn.Embedding(256, d_model)
+
         n_layers = params['n_layers']
         expand_factor = params['expand_factor']
         self.model = params['model']
@@ -135,6 +134,10 @@ class G2pModel(nn.Module):
                       beam_width=5,
                       max_tokens: int = 100,
                       ):
+        """
+        Return a list of the n-best predicted sequences, plus the probability of each
+        [ tensor([id0, id1, id2...]), prob ]
+        """
         self.eval()
 
         n_best = list()
@@ -164,20 +167,67 @@ class G2pModel(nn.Module):
                         n_best.sort(key=lambda x: -x[1])
                         del n_best[beam_width:]
 
+        if not n_best:
+            # This happens when we've reached max_tokens without any of the options terminating
+            logger.warning(f'{prompt=}\tReached {max_tokens} without terminating')
+            n_best = input_ids
         return n_best
+
+
+def restore_cp(cp_file, model, optimizer):
+    # Load the checkpoint
+    checkpoint = torch.load(cp_file)
+    # Load the model state dictionary
+    model.load_state_dict(checkpoint['model_state'])
+    # Load the optimizer state dictionary
+    optimizer.load_state_dict(checkpoint['optimizer_state'])
+    training_metrics = {
+        'epoch': checkpoint['epoch'],
+        'LER': checkpoint['LER'],
+        'WER': checkpoint['WER'],
+        'PER': checkpoint['PER'],
+        'train_loss': checkpoint['train_loss'],
+        'no_improvement_count': checkpoint['no_improvement_count'],
+    }
+    return training_metrics
+
+
+def load_model(config):
+    create_model(config)
+    model = create_model(config)
+    cp_file = config['PATH'] + 'best_mamba_model.cp'
+    # Do not care about optimizer or training state
+    checkpoint = torch.load(cp_file)
+    # Load the model state dictionary
+    model.load_state_dict(checkpoint['model_state'])
+    return model
+
+
+def create_model(config):
+    model_params = {'model': config['model'], 'd_model': config['d_model'],
+                    'n_layers': config['n_layers'], 'expand_factor': config['expand_factor']}
+    model = G2pModel(model_params).to(device)
+    return model
 
 
 def main():
     logger.info(f'Device used: {device}')
     # Run a test on the generate function for a trained network
-    path = "C:\\Users\\Richard\\Repository\\ddg2p\\experiments\\experiment_wiki_en\\mamba_model_de.ckp"
-    model_params = {'model': 'mamba', 'd_model': 256, 'n_layers': 2, 'expand_factor': 4}
+    path = "C:\\Users\\Richard\\Repository\\ddg2p\\experiments\\experiment_wiki_en\\"
+    model_params = {'model': 'mamba', 'd_model': 256, 'n_layers': 2, 'expand_factor': 4, 'PATH': path}
+    model = load_model(model_params).to(device)
 
-    model = G2pModel(model_params).to(device)
-    model.load_state_dict(torch.load(path))
-    for out in model.generate(['Abstoßung', 'hakelig', 'jahrhundertelang', 'Umzug']):
-        logger.info(out)
+    # Save the embedding weights to a CSV file
+    with open('embedding_weights.csv', 'w', newline='') as csvfile:
+        csvwriter = csv.writer(csvfile)
+        csvwriter.writerow(['Token'] + [f'Dim_{i}' for i in range(256)])
+        # Header row
+        embedding_weights = model.embedding.weight.data.cpu().numpy()
+        for idx, row in enumerate(embedding_weights):
+            csvwriter.writerow([idx] + row.tolist())
 
+
+    # TODO: This is mostly duplicate code - refactor this at some stage before the original code changes too much
     ipa_data = IpaDataset("C:\\Users\\Richard\\Repository\\g2p_data\\wikipron\\data\\scrape\\tsv\\", 'de_data.csv',
                           ['deu_latn_broad'], max_length=124, remove_spaces=True)
 
