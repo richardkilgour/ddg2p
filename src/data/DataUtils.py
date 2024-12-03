@@ -116,33 +116,33 @@ def get_metrics(words, target_languages, target_phonemes, model, beam_width=1):
 
     language_per = dict.fromkeys(unique_languages, [])
 
-    for t_lan, ortho, t_phon, output, g_out in zip(target_languages, words, target_phonemes, out, greedy):
+    for target_lan, ortho, target_phon, output, greedy_out in zip(target_languages, words, target_phonemes, out, greedy):
         try:
             lan, ortho_, phon = parse_output(output)
 
-            confusion_matrix.update(lan, t_lan)
+            confusion_matrix.update(lan, target_lan)
 
             # Phoneme Error rate (as a proportion of the word length)
-            per = calculate_per(phon, t_phon)
+            per = calculate_per(phon, target_phon)
             # Word error if any phonemes are incorrect
-            language_per[t_lan].append(per)
+            language_per[target_lan].append(per)
 
             # Let's compare them!!!
-            if g_out != output:
-                g_lan, g_ortho, g_phon = parse_output(g_out)
+            if greedy_out != output:
+                g_lan, g_ortho, g_phon = parse_output(greedy_out)
                 g_per = calculate_per(phon, g_phon)
                 logger.info(
                     f'{ortho=} BEAM got {("PERFECT" if (per==0.) else "BETTER") if per < g_per else ("WRONG" if g_per==0. else "WORSE") if per > g_per else "DIFFERENT"} '
-                    f'result\t{phon=}\t{g_phon=}\t{t_phon=}')
+                    f'result\t{phon=}\t{g_phon=}\t{target_phon=}')
 
             # Print every 100 words randomly
             if random.randint(1, 100) == 60:
-                logger.info(f'{ortho=}\t{lan=}\t{phon=}\t{t_lan=}\t{t_phon=}\t{per=}')
+                logger.info(f'{ortho=}\t{lan=}\t{phon=}\t{target_lan=}\t{target_phon=}\t{per=:.5%}')
         except Exception as e:
             # Early networks fail this. One epoch seems enough to get (mostly) valid UTF-8
             logger.error(f"An exception occurred for {output}: {type(e).__name__} - {e}")
-            confusion_matrix.update('ERROR', t_lan)
-            language_per[t_lan].append(1.)
+            confusion_matrix.update('ERROR', target_lan)
+            language_per[target_lan].append(1.)
     return confusion_matrix, language_per
 
 
@@ -165,7 +165,17 @@ def merge_dictionaries(dict1, dict2):
     return merged_dict
 
 
+def get_wer_per(per_rates: list[int]):
+    """For a given list of phoneme errors for a bunch of words, find the wer and average per """
+    per = sum(per_rates) / len(per_rates)
+    total_wer = [1 if p > 0. else 0 for p in per_rates]
+    wer = sum(total_wer) / len(total_wer)
+    return wer, per
+
+
 def test_on_subset(test_subset, model, beam_width=1, with_language=False):
+    # Return a matrix of language guesses as a confusion matrix object
+    # and a list of PER (per language) as a dict
     if with_language:
         bucket_sampler = BucketBatchSampler(test_subset, batch_size=64, delimiter=SEP)
     else:
@@ -173,6 +183,7 @@ def test_on_subset(test_subset, model, beam_width=1, with_language=False):
     dataloader = DataLoader(test_subset, batch_sampler=bucket_sampler, collate_fn=pad_collate, pin_memory=True)
     language_cm = None
     total_per = {}
+    # Test on each batch
     for source, _ in dataloader:
         languages, words, phonemes = zip(*[parse_output(tensor_to_utf8(item)) for item in source])
         if with_language:
@@ -184,6 +195,7 @@ def test_on_subset(test_subset, model, beam_width=1, with_language=False):
         else:
             language_cm = lan_cm
         total_per = merge_dictionaries(total_per, per)
+
     return language_cm, total_per
 
 
