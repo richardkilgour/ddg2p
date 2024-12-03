@@ -8,11 +8,15 @@ from numpy import Inf
 from torch.utils.data import DataLoader
 
 from src.data.DataConstants import device, PROFILING
-from src.data.DataUtils import test_on_subset, pad_collate
+from src.data.DataUtils import test_on_subset, pad_collate, get_wer_per
 from src.data.BucketBatchSampler import BucketBatchSampler
 from src.tools.G2pTrainer import G2pTrainer
 from src.data.IpaDataset import IpaDataset, IpaDatasetCollection
-from src.model.G2pModel import G2pModel
+from src.model.G2pModel import restore_cp, create_model
+
+if PROFILING:
+    from torch._C._profiler import ProfilerActivity
+    from torch.profiler import profiler
 
 logger = logging.getLogger(__name__)
 
@@ -32,40 +36,20 @@ def profile_func(func):
     def wrapper(*args):
         activities = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
         sort_by_keyword = "cuda_time_total"
-        with profiler.PROFILING(activities=activities, with_stack=False, profile_memory=True) as prof:
-            retval = func(args)
+        with profiler.profile(
+                activities=activities,
+                with_stack=False,
+                profile_memory=True
+        ) as prof:
+            retval = func()
             logger.info(prof.key_averages(group_by_stack_n=5).table(sort_by=sort_by_keyword, row_limit=10))
         return retval
 
     if PROFILING:
+
         return wrapper
     else:
         return func
-
-
-def restore_cp(cp_file, model, optimizer):
-    # Load the checkpoint
-    checkpoint = torch.load(cp_file)
-    # Load the model state dictionary
-    model.load_state_dict(checkpoint['model_state'])
-    # Load the optimizer state dictionary
-    optimizer.load_state_dict(checkpoint['optimizer_state'])
-    training_metrics = {
-        'epoch': checkpoint['epoch'],
-        'LER': checkpoint['LER'],
-        'WER': checkpoint['WER'],
-        'PER': checkpoint['PER'],
-        'train_loss': checkpoint['train_loss'],
-        'no_improvement_count': checkpoint['no_improvement_count'],
-    }
-    return training_metrics
-
-
-def create_model(config):
-    model_params = {'model': config['model']['model'], 'd_model': config['model']['d_model'],
-                    'n_layers': config['model']['n_layers'], 'expand_factor': config['model']['expand_factor']}
-    model = G2pModel(model_params).to(device)
-    return model
 
 
 def create_optimizer(model, config):
@@ -93,7 +77,8 @@ def gather_data(config):
 
         ipa_data = IpaDataset(config['data']['data_path'], config['data']['data_name'],
                               [train_split, test_split, validation_split],
-                              languages=config['data']['languages'], max_length=124, remove_spaces=remove_spaces)
+                              languages=config['data']['languages'], max_length=124, remove_spaces=remove_spaces,
+                              bidirectional=config['data']['bidirectional'])
     return ipa_data
 
 
@@ -104,7 +89,7 @@ def main():
 
     config = load_config(args.config)
 
-    model = create_model(config)
+    model = create_model(config['model'])
     dataset = gather_data(config)
 
     optimizer = create_optimizer(model, config)
@@ -140,7 +125,7 @@ def main():
                              test_subset=dataset.test_subset)
         trainer.train(config['training']['max_epochs'], training_metrics=training_metrics)
 
-    train_it()
+    #train_it()
 
     # Reload the best network
     cp_file = config['model']['PATH'] + 'best_mamba_model.cp'
@@ -152,10 +137,9 @@ def main():
     total_ler = 1. - language_cm.true_positive_rate()
     logger.info(f'{language_cm}')
     logger.info(f'{total_ler=}')
+
     for language, per_rates in total_per.items():
-        per = sum(per_rates) / len(per_rates)
-        total_wer = [1 if p > 0. else 0 for p in per_rates]
-        wer = sum(total_wer) / len(total_wer)
+        wer, per = get_wer_per(per_rates)
         logger.info(f'{language}\t{wer=:.5%}\t{per=:.5%}')
 
 

@@ -5,6 +5,7 @@ PAD = u'\x00'  # ASCII Null
 BOS = u'\x02'  # ASCII Start of Text
 EOS = u'\x03'  # ASCII End of Text
 FIN = u'\x04'  # ASCII End of Transmission
+BSP = u'\x08'  # ASCII Backspace (Separates backward and forward pass of the orthography)
 SEP = u'\x1d'  # ASCII Group Seperator (Separates language code from phonemes)
 
 PROFILING = False

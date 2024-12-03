@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import Dataset, Subset
 
 from src.data.DataUtils import string_to_class, iso3_to_iso2
-from src.data.DataConstants import PAD, BOS, EOS, SEP
+from src.data.DataConstants import PAD, BOS, EOS, SEP, BSP
 
 logger = logging.getLogger(__name__)
 
@@ -57,20 +57,15 @@ def load_file_into_dataframe(data_path: str, remove_spaces=False):
     return data
 
 
-def format_input_output(ortho, lang, phono):
-    input_data = BOS + ortho + EOS + lang + SEP + phono
-    target_data = PAD * (1 + len(ortho.encode('utf-8'))) + lang + SEP + phono + EOS
-    return input_data, target_data
-
-
 def total_length(row):
     return len((row['Ortho'] + row['Language'] + row['Phon']).encode('utf-8'))
 
 
 class IpaDataset(Dataset):
-    def __init__(self, datapath, out_filename, splits, languages=None, max_length=None, remove_spaces=False):
+    def __init__(self, datapath, out_filename, splits, languages=None, max_length=None, remove_spaces=False, bidirectional=False):
         self.path = datapath
         self.filename = out_filename
+        self.bidirectional = bidirectional
 
         full_path = self.path + self.filename
         # Recreate the data scv file if it does not already exist
@@ -101,9 +96,13 @@ class IpaDataset(Dataset):
                 full_path)
         all_data = torch.load(full_path)
         self.data = all_data['data']
+        # These do not restore properly. They should have a reference to self.data
         self.train_subset = all_data['training']
+        self.train_subset.dataset = self
         self.test_subset = all_data['testing']
+        self.test_subset.dataset = self
         self.valid_subset = all_data['validation']
+        self.valid_subset.dataset = self
 
     def __len__(self):
         return len(self.data)
@@ -111,13 +110,24 @@ class IpaDataset(Dataset):
     def __getitem__(self, idx):
         # Return a byte string. This still needs to be embedded and padded
         item = self.data.iloc[idx]
-        source, targets = format_input_output(item['Ortho'], item['Language'], item['Phon'])
+        source, targets = self.format_input_output(item['Ortho'], item['Language'], item['Phon'])
         x_enc = string_to_class(source)
         t_enc = string_to_class(targets)
         return torch.tensor(x_enc, dtype=torch.long), torch.tensor(t_enc, dtype=torch.long)
 
+    def format_input_output(self, ortho, lang, phono):
+        input_data = ortho + EOS + lang + SEP + phono
+        input_length = 1 + len(ortho.encode('utf-8'))
+        if self.bidirectional:
+            input_data = ortho[::-1] + BSP + input_data
+            input_length *= 2
+        input_data = BOS + input_data
+        target_data = PAD * input_length + lang + SEP + phono + EOS
+        return input_data, target_data
+
 
 class IpaDatasetCollection(Dataset):
+    # Load a bunch of IpaDataset and treat them as one
     def __init__(self, datapath, filenames):
         # Load a bunch of existing IpaDatasets
         self.datasets = []
