@@ -82,12 +82,8 @@ def gather_data(config):
     return ipa_data
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Experiment Configurations')
-    parser.add_argument('--config', type=str, required=True, help='Path to config file')
-    args = parser.parse_args()
-
-    config = load_config(args.config)
+def train_ddg2p(config_file):
+    config = load_config(config_file)
 
     model = create_model(config['model'])
     dataset = gather_data(config)
@@ -125,7 +121,7 @@ def main():
                              test_subset=dataset.test_subset)
         trainer.train(config['training']['max_epochs'], training_metrics=training_metrics)
 
-    #train_it()
+    train_it()
 
     # Reload the best network
     cp_file = config['model']['PATH'] + 'best_mamba_model.cp'
@@ -144,4 +140,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Experiment Configurations')
+    parser.add_argument('--config', type=str, required=True, help='Path to config file')
+    args = parser.parse_args()
+    train_ddg2p(args.config)
